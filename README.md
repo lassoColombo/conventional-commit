@@ -14,7 +14,7 @@ ccommit list v1.4.0 v1.5.0 | where breaking | select hash scope description
 Or, on a single message:
 
 ```nu
-"feat(api)!: drop /v1\n\nBREAKING CHANGE: legacy clients must upgrade" | ccommit parts
+"feat(api)!: drop /v1\n\nBREAKING CHANGE: legacy clients must upgrade" | ccommit decode
 # => {
 #   kind: 'feat', scope: 'api', breaking: true,
 #   description: 'drop /v1',
@@ -34,7 +34,7 @@ git clone git@github.com:lassoColombo/conventional-commit.git $dest
 
 # use the module
 use ccommit
-ccommit parts --help
+ccommit decode --help
 ```
 
 ## Quick start
@@ -48,7 +48,7 @@ use ccommit
 'wip stuff'            | ccommit is-conventional      # => false
 
 # full parse — always returns the same shape, even for non-conventional input
-'feat(ui)!: rework picker' | ccommit parts
+'feat(ui)!: rework picker' | ccommit decode
 # => { kind: feat, scope: ui, breaking: true, description: 'rework picker', ... }
 
 # walk a git range
@@ -64,7 +64,7 @@ ccommit list HEAD~50 HEAD | group-by kind | transpose kind count | update count 
 
 ## Parsed shape
 
-`ccommit parts` always returns this record. Fields are nullable so non-conventional input is still safe to consume:
+`ccommit decode` always returns this record. Fields are nullable so non-conventional input is still safe to consume:
 
 ```nu
 {
@@ -86,7 +86,7 @@ ccommit list HEAD~50 HEAD | group-by kind | transpose kind count | update count 
 | Command | Signature | Description |
 |---------|-----------|-------------|
 | `ccommit is-conventional` | `string -> bool` | Header-only validity check. Body and footers are ignored. |
-| `ccommit parts` | `string -> record` | Full structured parse. Returns the same shape for conventional and non-conventional input. |
+| `ccommit decode` | `string -> record` | Full structured parse. Returns the same shape for conventional and non-conventional input. |
 | `ccommit list` | `[from?: string, to: string = HEAD] -> table` | Walk `git log <from>..<to>` and parse each commit. Omit `from` to walk full history. |
 | `ccommit kinds` | `nothing -> list<string>` | The Angular-convention type list. **Informational only** — not used by validation. |
 
@@ -117,5 +117,5 @@ Parsing covers the full [Conventional Commits 1.0.0](https://www.conventionalcom
 
 ## Naming notes
 
-- `kinds` is **not** consulted by `is-conventional` or `parts`. The spec allows any letter-only type (rule 14); the list is exposed so callers that want a stricter project policy (e.g. "only Angular types") can layer it on top of the spec-correct parser.
-- `parts` rather than `parse` — `parse` would shadow the built-in `parse --regex` the module relies on internally.
+- `kinds` is **not** consulted by `is-conventional` or `decode`. The spec allows any letter-only type (rule 14); the list is exposed so callers that want a stricter project policy (e.g. "only Angular types") can layer it on top of the spec-correct parser.
+- `decode` rather than `parse` — `parse` would shadow the built-in `parse --regex` the module relies on internally.

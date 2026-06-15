@@ -7,7 +7,7 @@
 #
 # Public commands:
 #   ccommit is-conventional  — header-only validity check
-#   ccommit parts            — full structured parse of a message
+#   ccommit decode            — full structured parse of a message
 #   ccommit list             — git range → table of parsed commits
 # ---------- internals ----------
 # Subject line: <kind>[(scope)][!]: <description>. `(?i)` is applied at
@@ -103,7 +103,7 @@ def kinds [] { [
 @example "case-insensitive" { 'FIX: typo' | ccommit is-conventional } --result true
 @example "invalid wip" { 'wip stuff' | ccommit is-conventional } --result false
 export def is-conventional [] { $in | lines | first | default '' | $in =~ ('(?i)' + $SUBJECT_REGEX) }
-# Parse the piped commit message into its structured parts.
+# Decode the piped commit message into its structured parts.
 #
 # Always returns a record with the same shape, so non-conventional
 # input is still safe to consume:
@@ -117,11 +117,11 @@ export def is-conventional [] { $in | lines | first | default '' | $in =~ ('(?i)
 #   - footers      — table<token: string, value: string>
 #   - conventional — true when the subject line conforms
 @search-terms parse split decompose conventional
-@example "subject only" { 'feat(ui): add picker' | ccommit parts }
-@example "breaking via footer" { "feat: rework auth\n\nBREAKING CHANGE: drop /v1" | ccommit parts }
-@example "body and footers" { "fix(api): retry on 503\n\nThe upstream returns 503 during deploys.\n\nRefs #42\nReviewed-by: alice" | ccommit parts }
-@example "non-conventional" { 'hello world' | ccommit parts }
-export def parts [] {
+@example "subject only" { 'feat(ui): add picker' | ccommit decode }
+@example "breaking via footer" { "feat: rework auth\n\nBREAKING CHANGE: drop /v1" | ccommit decode }
+@example "body and footers" { "fix(api): retry on 503\n\nThe upstream returns 503 during deploys.\n\nRefs #42\nReviewed-by: alice" | ccommit decode }
+@example "non-conventional" { 'hello world' | ccommit decode }
+export def decode [] {
     let msg = $in
     let s = split-message $msg
     let footers = parse-footers $s.footer_lines
@@ -157,7 +157,7 @@ export def parts [] {
 # Walks `git log <from>..<to>` reading the full message body (`%B`),
 # with NUL-separated records (`-z`) so multi-line messages survive
 # intact. Each row carries hash/author/date plus the same fields
-# returned by `ccommit parts`.
+# returned by `ccommit decode`.
 @search-terms list log range git conventional
 @example "recent commits" { ccommit list HEAD~10 HEAD }
 @example "breaking only" { ccommit list | where breaking }
@@ -176,7 +176,7 @@ export def list [
         # cannot bleed into the metadata columns.
         let fields = $rec | split row --number 4 $sep
         let message = $fields | get 3? | default ''
-        let p = $message | parts
+        let p = $message | decode
         {
             hash: $fields.0
             author: $fields.1
