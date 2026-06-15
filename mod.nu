@@ -4,34 +4,20 @@
 # commit message into its structured pieces (kind, scope, breaking,
 # subject, body, footers), or walks a git range and produces a table of
 # fully parsed commits.
-#
-# Public commands:
-#   ccommit is-conventional  — header-only validity check
-#   ccommit decode            — full structured parse of a message
-#   ccommit list             — git range → table of parsed commits
-# ---------- internals ----------
-# Subject line: <kind>[(scope)][!]: <description>. `(?i)` is applied at
-# parse time so the type is matched case-insensitively per spec rule 15.
 
 const SUBJECT_REGEX = '^(?P<kind>[A-Za-z]+)(?:\((?P<scope>[^)]+)\))?(?P<breaking>!)?: (?P<description>.+)$'
-# Footer line: <token><sep><value>. `BREAKING CHANGE` and
-# `BREAKING-CHANGE` are the spec-mandated uppercase synonyms (rules 15,
-# 16); all other tokens use the `-`-for-whitespace word form (rule 9).
-# Separator is `: ` or ` #` (rule 8).
 const FOOTER_REGEX = '^(?P<token>BREAKING CHANGE|BREAKING-CHANGE|[A-Za-z][A-Za-z0-9-]*)(?P<sep>: | #)(?P<value>.*)$'
 def is-blank []: string -> bool { ($in | str trim) | is-empty }
+
 # Partition a commit message into subject / body / footer-block lines.
 def split-message [msg: string] {
     let lines = $msg | lines
     let subject = $lines | first | default ''
     let after = $lines | skip 1
     let empty = {subject: $subject, body: null, footer_lines: []}
-    # Spec rule 6: a body MUST begin one blank line after the description.
-    # Without that blank line, treat the message as subject-only.
     if ($after | is-empty) or (not ($after | first | is-blank)) { return $empty }
     let trimmed = $after | skip while { is-blank } | reverse | skip while { is-blank } | reverse
     if ($trimmed | is-empty) { return $empty }
-    # Normalize whitespace-only lines to '' so `split list` can find them.
     let norm = $trimmed | each {|l| if ($l | is-blank) { '' } else { $l }}
     let paragraphs = $norm | split list ''
     let last = $paragraphs | last
@@ -53,8 +39,8 @@ def split-message [msg: string] {
 }
 # Parse already-identified footer-block lines into a table of
 # {token, value} records. Lines that don't start a new footer are
-# appended as continuation to the previous footer's value (rule 10).
-def parse-footers [lines: list<string>] {
+# appended as continuation to the previous footer's value.
+def decode-footers [lines: list<string>] {
     $lines | reduce --fold [] {|line, acc|
         let m = $line | parse --regex $FOOTER_REGEX
         if ($m | is-empty) {
@@ -71,38 +57,21 @@ def parse-footers [lines: list<string>] {
         }
     }
 }
-# ---------- public ----------
-# Conventional Commits "recommended" types.
-#
-# Per spec rule 14 any noun is a valid type; this list is the widely-
-# used Angular convention plus `revert` and is exposed for callers that
-# want to apply a stricter project policy on top of the spec-correct
-# parser. It is NOT used by validation or parsing.
-@search-terms types kinds conventional commits
-@example "list the kinds" { ccommit kinds } --result [feat fix perf refactor revert test ci build docs style chore]
-def kinds [] { [
-    feat
-    fix
-    perf
-    refactor
-    revert
-    test
-    ci
-    build
-    docs
-    style
-    chore
-] }
+
 # Check whether the piped message has a conformant subject line.
 #
 # Only the first line is inspected — body and footers are ignored.
-# Type is matched case-insensitively per spec rule 15; a message with a
-# `BREAKING CHANGE` footer but a non-conformant header is still false.
+# Type matching is case-insensitive (spec rule 15); a message with a
+# `BREAKING CHANGE` footer but a non-conformant header still returns false.
+@category conventional-commits
 @search-terms validate check conventional
 @example "valid feat" { 'feat(ui): add picker' | ccommit is-conventional } --result true
 @example "case-insensitive" { 'FIX: typo' | ccommit is-conventional } --result true
 @example "invalid wip" { 'wip stuff' | ccommit is-conventional } --result false
-export def is-conventional [] { $in | lines | first | default '' | $in =~ ('(?i)' + $SUBJECT_REGEX) }
+export def is-conventional []: string -> bool {
+    $in | lines | first | default '' | $in =~ ('(?i)' + $SUBJECT_REGEX)
+}
+
 # Decode the piped commit message into its structured parts.
 #
 # Always returns a record with the same shape, so non-conventional
@@ -116,15 +85,16 @@ export def is-conventional [] { $in | lines | first | default '' | $in =~ ('(?i)
 #   - body         — body paragraphs joined with `\n\n`, or null
 #   - footers      — table<token: string, value: string>
 #   - conventional — true when the subject line conforms
+@category conventional-commits
 @search-terms parse split decompose conventional
 @example "subject only" { 'feat(ui): add picker' | ccommit decode }
 @example "breaking via footer" { "feat: rework auth\n\nBREAKING CHANGE: drop /v1" | ccommit decode }
 @example "body and footers" { "fix(api): retry on 503\n\nThe upstream returns 503 during deploys.\n\nRefs #42\nReviewed-by: alice" | ccommit decode }
 @example "non-conventional" { 'hello world' | ccommit decode }
-export def decode [] {
+export def decode []: string -> record {
     let msg = $in
     let s = split-message $msg
-    let footers = parse-footers $s.footer_lines
+    let footers = decode-footers $s.footer_lines
     let m = $s.subject | parse --regex ('(?i)' + $SUBJECT_REGEX)
     if ($m | is-empty) {
         {
@@ -152,19 +122,24 @@ export def decode [] {
         }
     }
 }
-# List commits in a git range with each message fully parsed.
+
+# List commits in a git range with each message fully decoded.
 #
 # Walks `git log <from>..<to>` reading the full message body (`%B`),
 # with NUL-separated records (`-z`) so multi-line messages survive
 # intact. Each row carries hash/author/date plus the same fields
-# returned by `ccommit decode`.
+# returned by `ccommit decode`. Errors if the working directory is
+# not a git repository or if a revision cannot be resolved.
+@category conventional-commits
 @search-terms list log range git conventional
 @example "recent commits" { ccommit list HEAD~10 HEAD }
+@example "between tags" { ccommit list v1.4.0 v1.5.0 }
+@example "full history" { ccommit list }
 @example "breaking only" { ccommit list | where breaking }
 @example "non-conformant" { ccommit list | where not conventional }
 export def list [
-    from?: string      # Starting revision, exclusive. Omit to walk full history.
-    to: string = HEAD  # Ending revision.
+    from?: string      # Starting revision (exclusive). Omit to walk full history.
+    to: string = HEAD  # Ending revision (inclusive). Defaults to HEAD.
 ]: nothing -> table {
     let range = if ($from | is-empty) { [] } else { [$"($from)..($to)"] }
     let sep = char us
@@ -172,8 +147,6 @@ export def list [
     let res = ^git --no-pager log -z --pretty=format:%H%x1f%an%x1f%aI%x1f%B ...$range | complete
     if $res.exit_code != 0 { error make --unspanned {msg: $res.stderr} }
     $res.stdout | split row $nul | where {|s| not ($s | is-blank)} | each {|rec|
-        # `--number 4` caps splits so a `\x1f` inside the message body
-        # cannot bleed into the metadata columns.
         let fields = $rec | split row --number 4 $sep
         let message = $fields | get 3? | default ''
         let p = $message | decode
