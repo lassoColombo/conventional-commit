@@ -123,6 +123,63 @@ export def decode []: string -> record {
     }
 }
 
+# Encode a structured commit record back into a Conventional Commits string.
+#
+# Inverse of `decode`. Round-trips canonical inputs:
+#   `'feat(ui)!: x' | decode | encode` returns `'feat(ui)!: x'`.
+#
+# Fields used (all optional unless noted):
+#   - kind         — required for a conventional subject; if null or missing,
+#                    the raw `subject` field is emitted verbatim so that
+#                    non-conventional decoded records round-trip
+#   - scope        — wrapped in parens when set
+#   - breaking     — when true AND no BREAKING (CHANGE|-CHANGE) footer is
+#                    present, adds `!` to the prefix. When a BREAKING footer
+#                    is present the `!` is suppressed (canonical minimal form);
+#                    this means `feat!: x\n\nBREAKING CHANGE: y` collapses to
+#                    `feat: x\n\nBREAKING CHANGE: y` on a decode→encode round
+#   - description  — required when `kind` is set
+#   - body         — emitted after one blank line; pre-joined with `\n\n`
+#                    between paragraphs (the shape `decode` produces)
+#   - footers      — emitted after one blank line, one per line, with `: `
+#                    separator. The alternate ` #` separator is NOT preserved.
+@category conventional-commits
+@search-terms format render serialize build conventional
+@example "basic" { {kind: feat, description: "add picker"} | ccommit encode } --result "feat: add picker"
+@example "with scope and breaking" { {kind: feat, scope: api, breaking: true, description: "drop /v1"} | ccommit encode } --result "feat(api)!: drop /v1"
+@example "round-trip" { 'feat(ui): add picker' | ccommit decode | ccommit encode } --result "feat(ui): add picker"
+export def encode []: record -> string {
+    let r = $in
+    let kind = $r.kind? | default null
+    let scope = $r.scope? | default null
+    let breaking = $r.breaking? | default false
+    let description = $r.description? | default null
+    let body = $r.body? | default null
+    let footers = $r.footers? | default []
+
+    let subject = if ($kind | is-empty) {
+        # No kind → emit the raw subject (round-trips non-conventional decodes).
+        $r.subject? | default ''
+    } else {
+        if ($description | is-empty) {
+            error make --unspanned {msg: "encode: `description` is required when `kind` is set"}
+        }
+        let scope_part = if ($scope | is-empty) { '' } else { '(' + $scope + ')' }
+        # If a BREAKING (CHANGE|-CHANGE) footer is already present, the
+        # spec considers that sufficient — suppress `!` for the canonical
+        # minimal form (rules 11, 16).
+        let has_breaking_footer = $footers | any {$in.token in ['BREAKING CHANGE' 'BREAKING-CHANGE']}
+        let bang = if ($breaking and (not $has_breaking_footer)) { '!' } else { '' }
+        $"($kind)($scope_part)($bang): ($description)"
+    }
+
+    let body_part = if ($body | is-empty) { '' } else { "\n\n" + $body }
+    let footer_part = if ($footers | is-empty) { '' } else {
+        "\n\n" + ($footers | each {|f| $"($f.token): ($f.value)"} | str join "\n")
+    }
+
+    $subject + $body_part + $footer_part
+}
 # List commits in a git range with each message fully decoded.
 #
 # Walks `git log <from>..<to>` reading the full message body (`%B`),
