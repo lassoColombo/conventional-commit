@@ -8,9 +8,9 @@ Parse a message into structured pieces, encode a record back into a message, and
 
 Because answering questions like `which breaking changes shipped between v1.4.0 and v1.5.0?` using grep and regexes goes wrong quickly.
 This module provides functions that parse conventional commits into predictable, structured data, according to the official specification.
-It allows you to answer those kinds of questions with ease, and precision:
+It allows you to answer those types of questions with ease, and precision:
 ```nu
-conventional-commit list v1.4.0 v1.5.0 | where breaking | select hash scope description
+conventional-commit list v1.4.0 v1.5.0 | where breaking | get hash 
 ```
 
 ## Installation
@@ -22,7 +22,7 @@ git clone git@github.com:lassoColombo/conventional-commit.git $dest
 
 # use the module
 use conventional-commit
-conventional-commit decode --help
+conventional-commit list --help
 ```
 
 ## Quick start
@@ -30,28 +30,21 @@ conventional-commit decode --help
 ```nu
 use conventional-commit
 
-# header-only validity check (non-throwing)
-'feat(ui): add picker' | conventional-commit is-conventional      # => true
-'FIX: typo'            | conventional-commit is-conventional      # => true  (case-insensitive)
-'wip stuff'            | conventional-commit is-conventional      # => false
+# validity check
+'feat(ui): add picker' | conventional-commit is-conventional
+# => true
 
-# full parse — always returns the same shape, even for non-conventional input
+# full parse
 'feat(ui)!: rework picker' | conventional-commit decode
-# => { kind: feat, scope: ui, breaking: true, description: 'rework picker', ... }
+# => { type: feat, scope: ui, breaking: true, description: 'rework picker', ... }
 
 # encode a record back into a message (inverse of decode)
-{kind: feat, scope: api, breaking: true, description: 'drop /v1'} | conventional-commit encode
+{type: feat, scope: api, breaking: true, description: 'drop /v1'} | conventional-commit encode
 # => 'feat(api)!: drop /v1'
 
 # walk a git range
 conventional-commit list HEAD~10 HEAD
-# => table<hash, author, date, subject, kind, scope, breaking, description, body, footers, conventional>
-
-# common queries
-conventional-commit list v1.4.0 v1.5.0 | where breaking
-conventional-commit list | where not conventional                  # find offenders
-conventional-commit list | where kind == 'feat' and scope == 'api'
-conventional-commit list HEAD~50 HEAD | group-by kind | transpose kind count | update count {|r| $r.count | length}
+# => table<hash, author, date, subject, type, scope, breaking, description, body, footers, conventional>
 ```
 
 ## Parsed shape
@@ -60,7 +53,7 @@ conventional-commit list HEAD~50 HEAD | group-by kind | transpose kind count | u
 
 ```nu
 {
-  kind:         string | null   # lowercased type, or null when not conventional
+  type:         string | null   # lowercased type, or null when not conventional
   scope:        string | null   # text inside parens, or null
   breaking:     bool            # true when `!` is in the prefix OR a BREAKING CHANGE footer is present
   subject:      string          # the raw first line
@@ -71,7 +64,7 @@ conventional-commit list HEAD~50 HEAD | group-by kind | transpose kind count | u
 }
 ```
 
-`conventional-commit list` augments each row with `hash`, `author`, and `date` from `git log`.
+`conventional-commit list` augments each row with `hash`, `author`, and `date` from `git log`. Decoration flags add more columns on demand — see [`list` decoration flags](#list-decoration-flags) below.
 
 ## Commands
 
@@ -80,7 +73,8 @@ conventional-commit list HEAD~50 HEAD | group-by kind | transpose kind count | u
 | `conventional-commit is-conventional` | `string -> bool` | Header-only validity check. Body and footers are ignored. |
 | `conventional-commit decode` | `string -> record` | Full structured parse. Returns the same shape for conventional and non-conventional input. |
 | `conventional-commit encode` | `record -> string` | Inverse of `decode`. Renders a structured record back into a Conventional Commits string. |
-| `conventional-commit list` | `[from?: string, to: string = HEAD] -> table` | Walk `git log <from>..<to>` and parse each commit. Omit `from` to walk full history. |
+| `conventional-commit list` | `[from?: string, to: string = HEAD] -> table` | Walk `git log <from>..<to>` and parse each commit. Omit `from` to walk full history. Optional flags add decoration columns (author email, committer, merge info, GPG status, containing tag, diff stats, per-file change buckets). |
+| `conventional-commit valid-types` | `nothing -> list<string>` | Project-policy type list. Reads `$env.CONVENTIONAL_COMMIT_VALID_TYPES` (list or comma/space-separated string) or falls back to the Angular convention. **`is-conventional` and `decode` both consult this list** — a type that isn't in it is treated as non-conventional. |
 
 ### `conventional-commit encode` round-trip
 
@@ -93,7 +87,7 @@ conventional-commit list HEAD~50 HEAD | group-by kind | transpose kind count | u
 
 Notes on the canonical minimal form:
 
-- When `kind` is null/missing, the raw `subject` field is emitted verbatim — so non-conventional decodes still round-trip.
+- When `type` is null/missing, the raw `subject` field is emitted verbatim — so non-conventional decodes still round-trip.
 - When `breaking: true` AND a `BREAKING CHANGE` / `BREAKING-CHANGE` footer is present, the `!` marker is suppressed (the footer alone is sufficient per rules 11, 16). This means `feat!: x\n\nBREAKING CHANGE: y` collapses to `feat: x\n\nBREAKING CHANGE: y` on a decode → encode round-trip.
 - Footers are always emitted with the `: ` separator; the alternate ` #` separator is not preserved.
 
@@ -108,20 +102,237 @@ conventional-commit list v1.4.0 v1.5.0      # commits between two tags
 conventional-commit list main..feature/x    # also works — pass any single revspec as `from`
 ```
 
-Messages are read with `git log -z --pretty=%B`, so multi-line bodies and footers survive intact.
+### `list` decoration flags
 
-## Spec compliance
+Each flag opts the corresponding column(s) into the output. Default `list` is unchanged — these are pure additions.
 
-Parsing covers the full [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) BNF:
+| Flag | Adds columns | Source |
+|---|---|---|
+| `--with-email` | `author_email: string` | `git log %ae` |
+| `--with-committer` | `committer, committer_email, committer_date` | `git log %cn / %ce / %cI` |
+| `--with-merge-info` | `parents: list<string>, is_merge: bool` | `git log %P` |
+| `--with-signature` | `signature: string` (`G`/`B`/`U`/`N`/`E`) | `git log %G?` |
+| `--with-tag` | `tag: string \| null` — earliest tag containing the commit | `git tag --contains --sort=creatordate` per row |
+| `--with-stats` | `files_changed: int, insertions: int, deletions: int` | `git show --shortstat` per row |
+| `--with-changes` | `added: list<string>, modified: list<string>, deleted: list<string>` | `git show --name-status` per row, bucketed by status code (renames/copies land in `modified` under their new path) |
 
-- Any letter-only type, case-insensitive (rules 1, 14, 15) — `Feat`, `FIX`, and `feat` are all valid
-- Optional scope in parentheses (rule 4)
-- `!` breaking marker in the prefix (rule 13) — folded into the `breaking` flag
-- Body after exactly one blank line; free-form paragraphs (rules 6, 7) — a missing blank line means the message is treated as subject-only, no body
-- Footer block with `<token>: <value>` or `<token> #<value>` separators (rule 8), word form using `-` for whitespace (rule 9)
-- Multi-line footer values continue on subsequent non-footer-matching lines (rule 10)
-- `BREAKING CHANGE` and `BREAKING-CHANGE` footers (rules 11, 12, 16) set `breaking: true` in the parsed record, alongside any `!` marker
 
-## Naming notes
+## Project-policy type list
 
-- `decode` / `encode` rather than `parse` / `format` — `parse` would shadow the built-in `parse --regex` the module relies on internally.
+`valid-types` is the **source of truth** for what counts as a conventional commit. `is-conventional` and `decode` both build their subject regex from this list — a commit whose type isn't in the list parses as non-conventional. The spec itself would accept any letter-only type (rule 14), but in practice every team wants a closed set: this module makes that closed set explicit and configurable.
+
+```nu
+conventional-commit valid-types
+# => [feat fix docs style refactor perf test build ci chore revert]   # Angular default
+```
+
+Override it via `$env.CONVENTIONAL_COMMIT_VALID_TYPES`. Both a list and a comma/space-separated string are accepted (env vars set from POSIX shells are always strings):
+
+```nu
+# Nushell config — list form
+$env.CONVENTIONAL_COMMIT_VALID_TYPES = [feat fix chore docs ops]
+```
+
+```sh
+# POSIX shell / CI env — string form
+export CONVENTIONAL_COMMIT_VALID_TYPES="feat,fix,chore,docs,ops"
+```
+
+With the override above, `feat: x` and `ops(infra): y` are conventional; `refactor: z` is not. Matching stays case-insensitive (spec rule 15) — `FEAT: x` still decodes to `type: feat`.
+
+## CI/CD recipes
+
+### Validate every commit in a pull request
+
+Fail the pipeline if any commit on the PR branch isn't conventional. The offenders' hashes and subjects are printed before exit so the author can fix them up:
+
+```nu
+def assert-conventional [base: string = 'origin/main'] {
+    let offenders = conventional-commit list $base HEAD | where not conventional
+    if ($offenders | is-empty) { return }
+    print 'Non-conventional commits:'
+    $offenders | select hash author subject | print
+    error make --unspanned {msg: $"($offenders | length) commit(s) need a conventional header"}
+}
+```
+
+For a stricter policy that also rejects types outside your team's whitelist — `valid-types` reads `$env.CONVENTIONAL_COMMIT_VALID_TYPES` or falls back to the Angular default:
+
+```nu
+def assert-valid-types [base: string = 'origin/main'] {
+    let allowed = conventional-commit valid-types
+    let violations = conventional-commit list $base HEAD
+        | where conventional and ($it.type not-in $allowed)
+    if ($violations | is-empty) { return }
+    $violations | select hash type subject | print
+    error make --unspanned {msg: $"disallowed type — allowed: ($allowed | str join ', ')"}
+}
+```
+
+### Skip CI when no commit is build-worthy
+
+Short-circuit the pipeline when the branch only carries `docs` / `chore` / `style` noise. The build-worthy set is its own env knob so teams can classify their types without forking the recipe:
+
+```nu
+# Set once in your CI env (or Nushell config):
+#   $env.CONVENTIONAL_COMMIT_BUILDABLE_TYPES = [feat fix perf refactor]
+let buildable = $env.CONVENTIONAL_COMMIT_BUILDABLE_TYPES? | default [feat fix perf refactor]
+let signal = conventional-commit list origin/main HEAD
+    | where conventional and ($it.type in $buildable)
+
+if ($signal | is-empty) {
+    print 'no build-worthy commits — skipping pipeline'
+    exit 0
+}
+```
+
+### Build only the components touched by a merge request
+
+In a monorepo where each top-level directory is an independent component, derive the touched set from the MR's commits, intersect with the components that actually exist on disk, then build only those. The filesystem lookup keeps stale paths (deleted dirs, repo-meta dirs) out:
+
+```nu
+# Top-level dirs that aren't meta/hidden (`_cicfg`, `.github`, …).
+def components [root: path = .]: nothing -> list<string> {
+    ls --short-names $root | where type == dir and (not ($it.name =~ '^[_.]')) | get name | sort
+}
+
+def touched-components [base: string = 'origin/main', root: path = .]: nothing -> list<string> {
+    let known = components $root
+    conventional-commit list $base HEAD --with-changes
+    | each {|r| [...$r.added ...$r.modified ...$r.deleted]}
+    | flatten | uniq
+    | each { path split | first }
+    | where $it in $known
+    | uniq | sort
+}
+
+for c in (touched-components) {
+    print $"building ($c)…"
+    ^make -C $c build test
+}
+```
+
+### Determine the next semver bump
+
+Look at every conventional commit since the last tag and pick `major` / `minor` / `patch` from their types and breaking flags. Handles the first-release case (no tag yet) by walking full history:
+
+```nu
+def next-bump []: nothing -> string {
+    let last_tag = ^git describe --tags --abbrev=0 | complete
+    let commits = (
+        if $last_tag.exit_code == 0 {
+            conventional-commit list ($last_tag.stdout | str trim) HEAD
+        } else {
+            conventional-commit list                  # no tags yet — walk full history
+        }
+    ) | where conventional
+
+    if ($commits | any {$in.breaking})                            { 'major' }
+    else if ($commits | any {$in.type == 'feat'})                 { 'minor' }
+    else if ($commits | any {$in.type in [fix perf refactor]})    { 'patch' }
+    else                                                          { 'none'  }
+}
+
+let bump = next-bump
+if $bump == 'none' { print 'no user-facing changes since last tag'; exit 0 }
+print $'next release: ($bump)'
+```
+
+### Generate a release changelog
+
+Group conventional commits between two tags by type and render markdown sections. Two design choices keep the output safe and predictable:
+
+- **Section order is driven by the spec** — not by which type happens to appear first in the data — so the output is stable release-over-release.
+- **User-supplied content (description, scope) goes through an `md-escape` helper** so backticks, brackets, underscores, etc. in a description can't break the rendered markdown. The bullet is assembled via `format pattern` from pre-computed columns rather than inline string building per row.
+
+```nu
+# Escape characters that would otherwise break markdown rendering inside
+# a commit description: backslash, backtick, *, _, [], <, >.
+def md-escape []: string -> string {
+    $in | str replace --all --regex r#'([\\*_\[\]`<>])'# r#'\${1}'#
+}
+
+def changelog [from: string, to: string = HEAD]: nothing -> string {
+    let sections = [
+        [type,     title];
+        [feat,     '✨ Features']
+        [fix,      '🐛 Bug Fixes']
+        [perf,     '⚡ Performance']
+        [refactor, '♻️ Refactoring']
+    ]
+    let commits = conventional-commit list $from $to
+        | where conventional
+        | insert short       {|c| $c.hash | str substring ..7}
+        | update description {|c| $c.description | md-escape}
+        | insert scope_part  {|c| if ($c.scope | is-empty) { '' } else { $"\(($c.scope | md-escape)\) "}}
+        | insert bang        {|c| if $c.breaking { ' **BREAKING**' } else { '' }}
+
+    $sections | each {|s|
+        let rows = $commits | where type == $s.type
+        if ($rows | is-empty) { return null }
+        let bullets = $rows | format pattern '- {scope_part}{description}{bang} — `{short}`'
+        $"## ($s.title)\n" + ($bullets | str join "\n")
+    } | compact | str join "\n\n"
+}
+
+changelog v1.4.0 v1.5.0 | save -f CHANGELOG-v1.5.0.md
+```
+
+### Surface BREAKING CHANGE notes for a release
+
+Every breaking commit, with its explicit `BREAKING CHANGE` footer text inlined when present:
+
+```nu
+conventional-commit list v1.4.0 v1.5.0
+| where breaking
+| insert notes {|c|
+    $c.footers
+    | where token in ['BREAKING CHANGE' 'BREAKING-CHANGE']
+    | get value
+}
+| select hash type scope description notes
+```
+
+### Which release first shipped a fix
+
+`--with-tag` annotates every commit with the earliest tag that contains it — perfect for "which release shipped this?":
+
+```nu
+conventional-commit list v1.0.0 --with-tag
+| where type == 'fix' and scope == 'auth'
+| select hash description tag
+```
+
+### Block unsigned or bad-signature commits
+
+For protected branches that mandate signed commits — `G`=good, `U`=good but unknown signer (acceptable in most policies):
+
+```nu
+def assert-signed [base: string = 'origin/main'] {
+    let unsigned = conventional-commit list $base HEAD --with-signature
+        | where signature not-in ['G' 'U']
+    if ($unsigned | is-empty) { return }
+    $unsigned | select hash author signature subject | print
+    error make --unspanned {msg: $"($unsigned | length) unsigned commit(s)"}
+}
+```
+
+### Author contribution leaderboard
+
+Conventional commits per contributor between two tags. A single `each` builds the summary row — much cleaner than chained `insert`s when several aggregates share the same input:
+
+```nu
+conventional-commit list v1.0.0 v2.0.0 --with-email
+| where conventional
+| group-by author_email --to-table
+| each {|g|
+    {
+        author:   $g.author_email
+        commits:  ($g.items | length)
+        features: ($g.items | where type == 'feat' | length)
+        fixes:    ($g.items | where type == 'fix'  | length)
+        breaking: ($g.items | where breaking       | length)
+    }
+}
+| sort-by commits --reverse
+```

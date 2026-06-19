@@ -5,17 +5,17 @@ use ../mod.nu *
 # ---------- normal behaviour: subject extraction ----------
 
 @test
-def "extracts kind, scope and description" [] {
+def "extracts type, scope and description" [] {
     let p = ('feat(ui): add picker' | decode)
-    assert equal $p.kind "feat"
+    assert equal $p.type "feat"
     assert equal $p.scope "ui"
     assert equal $p.description "add picker"
 }
 
 @test
-def "lowercases the kind" [] {
-    assert equal ('FIX: typo' | decode | get kind) "fix"
-    assert equal ('Feat: stuff' | decode | get kind) "feat"
+def "lowercases the type" [] {
+    assert equal ('FIX: typo' | decode | get type) "fix"
+    assert equal ('Feat: stuff' | decode | get type) "feat"
 }
 
 @test
@@ -170,8 +170,8 @@ def "BREAKING CHANGE footer survives in the footers table" [] {
 @test
 def "non-conventional input keeps the same record shape" [] {
     let p = ('hello world' | decode)
-    assert equal ($p | columns) [kind scope breaking subject description body footers conventional]
-    assert equal $p.kind null
+    assert equal ($p | columns) [type scope breaking subject description body footers conventional]
+    assert equal $p.type null
     assert equal $p.scope null
     assert equal $p.breaking false
     assert equal $p.subject "hello world"
@@ -185,7 +185,7 @@ def "non-conventional input keeps the same record shape" [] {
 def "empty input keeps the same record shape" [] {
     let p = ('' | decode)
     assert equal $p.subject ""
-    assert equal $p.kind null
+    assert equal $p.type null
     assert equal $p.conventional false
     assert equal $p.body null
     assert equal $p.footers []
@@ -202,5 +202,35 @@ def "non-conventional subject + body shape" [] {
 @test
 def "conventional record has all expected fields" [] {
     let p = ('feat: x' | decode)
-    assert equal ($p | columns) [kind scope breaking subject description body footers conventional]
+    assert equal ($p | columns) [type scope breaking subject description body footers conventional]
+}
+
+# ---------- type-whitelist gating ----------
+
+@test
+def "type outside the whitelist makes the commit non-conventional" [] {
+    let p = ('wip: stuff' | decode)
+    assert equal $p.conventional false
+    assert equal $p.type null
+    # subject is still preserved verbatim
+    assert equal $p.subject "wip: stuff"
+}
+
+@test
+def "env override accepts otherwise out-of-policy types" [] {
+    with-env {CONVENTIONAL_COMMIT_VALID_TYPES: [wip hotfix]} {
+        let p = ('wip(api)!: rework' | decode)
+        assert equal $p.conventional true
+        assert equal $p.type "wip"
+        assert equal $p.scope "api"
+        assert equal $p.breaking true
+        assert equal $p.description "rework"
+    }
+}
+
+@test
+def "env override that excludes feat makes a feat commit non-conventional" [] {
+    with-env {CONVENTIONAL_COMMIT_VALID_TYPES: [chore docs]} {
+        assert equal ('feat: x' | decode | get conventional) false
+    }
 }

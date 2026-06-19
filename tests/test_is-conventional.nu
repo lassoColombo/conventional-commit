@@ -25,11 +25,36 @@ def "accepts type with scope and ! breaking marker" [] {
 }
 
 @test
-def "accepts any letter-only type per spec rule 14" [] {
-    # The parser does NOT restrict to the Angular set.
-    assert equal ('wip: stuff' | is-conventional) true
-    assert equal ('hotfix: it' | is-conventional) true
-    assert equal ('chore: bump' | is-conventional) true
+def "accepts every type in the default Angular whitelist" [] {
+    for t in [feat fix docs style refactor perf test build ci chore revert] {
+        assert equal ($"($t): x" | is-conventional) true
+    }
+}
+
+@test
+def "rejects types outside the configured whitelist" [] {
+    # `wip` / `hotfix` are not part of the Angular default — the parser
+    # consults `valid-types`, so out-of-policy types are non-conventional.
+    assert equal ('wip: stuff' | is-conventional) false
+    assert equal ('hotfix: it' | is-conventional) false
+}
+
+@test
+def "env override widens what counts as conventional" [] {
+    with-env {CONVENTIONAL_COMMIT_VALID_TYPES: [wip hotfix]} {
+        assert equal ('wip: stuff' | is-conventional) true
+        assert equal ('hotfix: it' | is-conventional) true
+        # And NARROWS — `feat` is no longer in the configured set.
+        assert equal ('feat: x' | is-conventional) false
+    }
+}
+
+@test
+def "env override is honored from a CSV string too" [] {
+    with-env {CONVENTIONAL_COMMIT_VALID_TYPES: "wip, hotfix"} {
+        assert equal ('wip: stuff' | is-conventional) true
+        assert equal ('feat: x' | is-conventional) false
+    }
 }
 
 @test
@@ -37,6 +62,14 @@ def "type match is case-insensitive per spec rule 15" [] {
     assert equal ('FIX: typo' | is-conventional) true
     assert equal ('Feat: stuff' | is-conventional) true
     assert equal ('fEaT(ui): mixed case' | is-conventional) true
+}
+
+@test
+def "case-insensitive matching applies to env-set types too" [] {
+    with-env {CONVENTIONAL_COMMIT_VALID_TYPES: [wip]} {
+        assert equal ('WIP: x' | is-conventional) true
+        assert equal ('Wip(api): x' | is-conventional) true
+    }
 }
 
 # ---------- edge cases ----------
