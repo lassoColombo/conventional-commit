@@ -1,70 +1,62 @@
-# ccommit
+# conventional-commit
 
-[Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) for Nushell — parse a message into structured pieces, or walk a git range and get a table of fully parsed commits.
+[Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) for Nushell
+
+Parse a message into structured pieces, encode a record back into a message, and walk git ranges.
 
 ## Why?
 
-`git log --grep` and `awk` can find commits, but they can't answer questions about them. "Which breaking changes shipped between `v1.4.0` and `v1.5.0`?" turns into a parser the moment a `BREAKING CHANGE:` footer enters the picture — and writing that parser correctly (multi-line footer continuations, `!` vs footer breaking markers, case-insensitive types) is a surprising amount of work.
-
+Because answering questions like `which breaking changes shipped between v1.4.0 and v1.5.0?` using grep and regexes goes wrong quickly.
+This module provides functions that parse conventional commits into predictable, structured data, according to the official specification.
+It allows you to answer those kinds of questions with ease, and precision:
 ```nu
-ccommit list v1.4.0 v1.5.0 | where breaking | select hash scope description
-# table of just the breaking changes, ready to paste into release notes
-```
-
-Or, on a single message:
-
-```nu
-"feat(api)!: drop /v1\n\nBREAKING CHANGE: legacy clients must upgrade" | ccommit decode
-# => {
-#   kind: 'feat', scope: 'api', breaking: true,
-#   description: 'drop /v1',
-#   body: null,
-#   footers: [{token: 'BREAKING CHANGE', value: 'legacy clients must upgrade'}],
-#   conventional: true,
-#   ...
-# }
+conventional-commit list v1.4.0 v1.5.0 | where breaking | select hash scope description
 ```
 
 ## Installation
 
 ```nu
 # clone into one of your NU_LIB_DIRS
-let dest = [($env.NU_LIB_DIRS | first) ccommit] | path join
+let dest = [($env.NU_LIB_DIRS | first) conventional-commit] | path join
 git clone git@github.com:lassoColombo/conventional-commit.git $dest
 
 # use the module
-use ccommit
-ccommit decode --help
+use conventional-commit
+conventional-commit decode --help
 ```
 
 ## Quick start
 
 ```nu
-use ccommit
+use conventional-commit
 
 # header-only validity check (non-throwing)
-'feat(ui): add picker' | ccommit is-conventional      # => true
-'FIX: typo'            | ccommit is-conventional      # => true  (case-insensitive)
-'wip stuff'            | ccommit is-conventional      # => false
+'feat(ui): add picker' | conventional-commit is-conventional      # => true
+'FIX: typo'            | conventional-commit is-conventional      # => true  (case-insensitive)
+'wip stuff'            | conventional-commit is-conventional      # => false
 
 # full parse — always returns the same shape, even for non-conventional input
-'feat(ui)!: rework picker' | ccommit decode
+'feat(ui)!: rework picker' | conventional-commit decode
 # => { kind: feat, scope: ui, breaking: true, description: 'rework picker', ... }
 
+# encode a record back into a message (inverse of decode)
+{kind: feat, scope: api, breaking: true, description: 'drop /v1'} | conventional-commit encode
+# => 'feat(api)!: drop /v1'
+
 # walk a git range
-ccommit list HEAD~10 HEAD
+conventional-commit list HEAD~10 HEAD
 # => table<hash, author, date, subject, kind, scope, breaking, description, body, footers, conventional>
 
 # common queries
-ccommit list v1.4.0 v1.5.0 | where breaking
-ccommit list | where not conventional                  # find offenders
-ccommit list | where kind == 'feat' and scope == 'api'
-ccommit list HEAD~50 HEAD | group-by kind | transpose kind count | update count {|r| $r.count | length}
+conventional-commit list v1.4.0 v1.5.0 | where breaking
+conventional-commit list | where not conventional                  # find offenders
+conventional-commit list | where kind == 'feat' and scope == 'api'
+conventional-commit list HEAD~50 HEAD | group-by kind | transpose kind count | update count {|r| $r.count | length}
 ```
 
 ## Parsed shape
 
-`ccommit decode` always returns this record. Fields are nullable so non-conventional input is still safe to consume:
+`conventional-commit decode` always returns this record. Fields are nullable so non-conventional input is still safe to consume:
 
 ```nu
 {
@@ -79,26 +71,41 @@ ccommit list HEAD~50 HEAD | group-by kind | transpose kind count | update count 
 }
 ```
 
-`ccommit list` augments each row with `hash`, `author`, and `date` from `git log`.
+`conventional-commit list` augments each row with `hash`, `author`, and `date` from `git log`.
 
 ## Commands
 
 | Command | Signature | Description |
 |---------|-----------|-------------|
-| `ccommit is-conventional` | `string -> bool` | Header-only validity check. Body and footers are ignored. |
-| `ccommit decode` | `string -> record` | Full structured parse. Returns the same shape for conventional and non-conventional input. |
-| `ccommit list` | `[from?: string, to: string = HEAD] -> table` | Walk `git log <from>..<to>` and parse each commit. Omit `from` to walk full history. |
-| `ccommit kinds` | `nothing -> list<string>` | The Angular-convention type list. **Informational only** — not used by validation. |
+| `conventional-commit is-conventional` | `string -> bool` | Header-only validity check. Body and footers are ignored. |
+| `conventional-commit decode` | `string -> record` | Full structured parse. Returns the same shape for conventional and non-conventional input. |
+| `conventional-commit encode` | `record -> string` | Inverse of `decode`. Renders a structured record back into a Conventional Commits string. |
+| `conventional-commit list` | `[from?: string, to: string = HEAD] -> table` | Walk `git log <from>..<to>` and parse each commit. Omit `from` to walk full history. |
 
-### `ccommit list` ranges
+### `conventional-commit encode` round-trip
+
+`encode` is the inverse of `decode` for canonical inputs:
+
+```nu
+'feat(ui): add picker' | conventional-commit decode | conventional-commit encode
+# => 'feat(ui): add picker'
+```
+
+Notes on the canonical minimal form:
+
+- When `kind` is null/missing, the raw `subject` field is emitted verbatim — so non-conventional decodes still round-trip.
+- When `breaking: true` AND a `BREAKING CHANGE` / `BREAKING-CHANGE` footer is present, the `!` marker is suppressed (the footer alone is sufficient per rules 11, 16). This means `feat!: x\n\nBREAKING CHANGE: y` collapses to `feat: x\n\nBREAKING CHANGE: y` on a decode → encode round-trip.
+- Footers are always emitted with the `: ` separator; the alternate ` #` separator is not preserved.
+
+### `conventional-commit list` ranges
 
 `from` is exclusive, `to` defaults to `HEAD` — matching `git log` semantics:
 
 ```nu
-ccommit list                    # full history
-ccommit list HEAD~10            # last 10 commits
-ccommit list v1.4.0 v1.5.0      # commits between two tags
-ccommit list main..feature/x    # also works — pass any single revspec as `from`
+conventional-commit list                    # full history
+conventional-commit list HEAD~10            # last 10 commits
+conventional-commit list v1.4.0 v1.5.0      # commits between two tags
+conventional-commit list main..feature/x    # also works — pass any single revspec as `from`
 ```
 
 Messages are read with `git log -z --pretty=%B`, so multi-line bodies and footers survive intact.
@@ -117,5 +124,4 @@ Parsing covers the full [Conventional Commits 1.0.0](https://www.conventionalcom
 
 ## Naming notes
 
-- `kinds` is **not** consulted by `is-conventional` or `decode`. The spec allows any letter-only type (rule 14); the list is exposed so callers that want a stricter project policy (e.g. "only Angular types") can layer it on top of the spec-correct parser.
-- `decode` rather than `parse` — `parse` would shadow the built-in `parse --regex` the module relies on internally.
+- `decode` / `encode` rather than `parse` / `format` — `parse` would shadow the built-in `parse --regex` the module relies on internally.
