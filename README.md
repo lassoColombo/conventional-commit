@@ -229,25 +229,34 @@ for c in (touched-components) {
 
 ### Determine the next semver bump
 
-Look at every conventional commit since the last tag and pick `major` / `minor` / `patch` from their types and breaking flags. Handles the first-release case (no tag yet) by walking full history:
+Look at every conventional commit since the last tag, derive the bump level (`major` / `minor` / `patch`) from their types and breaking flags, then compute the actual next version with the [`semver`](https://github.com/lassoColombo/semver) module.
 
 ```nu
-def next-bump [last_tag?: string]: nothing -> string {
+use ccommit
+use semver
+
+# Returns the next version string (e.g. `1.5.0`), always strictly greater
+# than `last`. Returns null when no release-worthy commit has landed since
+# `last` — a single sentinel regardless of whether a tag was passed.
+def next-version [
+last?: string # e.g. 1.97.45
+]: nothing -> any {   
+    let current = $last | default '0.0.0'
     let commits = (
-        if ($last_tag | is-empty) { ccommit list } else {
-            ccommit list $last_tag HEAD
-        }
+        if ($last | is-empty) { ccommit list } else { ccommit list $last HEAD }
     ) | where conventional
 
-    if ($commits | any {$in.breaking})                            { 3 } # major
-    else if ($commits | any {$in.type == 'feat'})                 { 2 } #'minor
-    else if ($commits | any {$in.type in [fix perf refactor]})    { 1 } # patch
-    else                                                          { 0 } # no bump
+    if ($commits | any {$in.breaking}) {
+        $current | semver decode | semver bump major
+    } else if ($commits | any {$in.type == 'feat'}) {
+        $current | semver decode | semver bump minor
+    } else if ($commits | any {$in.type in [fix perf refactor]}) {
+        $current | semver decode | semver bump patch
+    } else {
+        return null   # no release-worthy change
+    }
+    | semver encode
 }
-
-let bump = next-bump $last_tag
-if $bump == null { print 'no release-worthy changes since last tag'; return }
-print $'next release: ($bump)'
 ```
 
 ### Block unsigned or bad-signature commits
@@ -257,7 +266,8 @@ For protected branches that mandate signed commits - `G`=good, `U`=good but unkn
 ```nu
 def assert-signed [base: string = 'origin/main'] {
     let unsigned = ccommit list $base HEAD --with-signature
-        | where signature not-in ['G' 'U']
+    | where signature not-in ['G' 'U']
+
     if ($unsigned | is-empty) { return }
     $unsigned | select hash author signature subject | print
     error make --unspanned {msg: $"($unsigned | length) unsigned commit(s)"}
