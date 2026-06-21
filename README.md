@@ -1,12 +1,32 @@
 # conventional-commit
 
-[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) for Nushell
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) module for Nushell.
 
 Parse a message into structured pieces, encode a record back into a message, and walk git ranges.
 
+1. [conventional-commit](#conventional-commit)
+   1. [Why?](#why?)
+   2. [Installation](#installation)
+   3. [Quick start](#quick-start)
+   4. [Parsed shape](#parsed-shape)
+   5. [Commands](#commands)
+      1. [`ccommit encode` round-trip](#`ccommit-encode`-round-trip)
+      2. [`ccommit list` ranges](#`ccommit-list`-ranges)
+      3. [`list` decoration flags](#`list`-decoration-flags)
+         1. [Performance](#performance)
+   6. [Spec conformance](#spec-conformance)
+      1. [Project-policy type list](#project-policy-type-list)
+   7. [CI/CD recipes](#ci/cd-recipes)
+      1. [Validate every commit in a pull request](#validate-every-commit-in-a-pull-request)
+      2. [Skip CI when no commit is build-worthy](#skip-ci-when-no-commit-is-build-worthy)
+      3. [Build only the components touched by a merge request](#build-only-the-components-touched-by-a-merge-request)
+      4. [Determine the next semver bump](#determine-the-next-semver-bump)
+      5. [Block unsigned or bad-signature commits](#block-unsigned-or-bad-signature-commits)
+      6. [Generate a release changelog](#generate-a-release-changelog)
+
 ## Why?
 
-Because answering questions like `which breaking changes shipped between v1.4.0 and v1.5.0?` using grep and regexes goes wrong quickly.  
+Because answering questions like `which breaking changes shipped between v1.4.0 and v1.5.0?` is more difficult than it should be.
 
 This module provides functions that parse conventional commits into predictable, structured data, according to the official specification.  
 It allows you to answer those types of questions with ease, and precision:
@@ -115,13 +135,13 @@ Each flag opts the corresponding column(s) into the output. Default `list` is un
 
 #### Performance
 
-The flags fall into two cost tiers:
+The flags fall into three cost tiers:
 
 - **Free** - `--with-email`, `--with-committer`, `--with-merge-info`, `--with-signature`. The base `list` already fetches every one of these fields in its single `git log` call (`%ae`, `%cn`/`%ce`/`%cI`, `%P`, `%G?`). The flag only decides whether the column is kept; toggling it adds **no extra work**. Default `list` simply rejects these columns at the end.
-- **One git process per commit** - `--with-tag` (`git tag --contains`), `--with-stats` (`git show --shortstat`), `--with-changes` (`git show --name-status`). These can't be batched into the initial `git log`, so each spawns a subprocess **for every row in the range**. Cost scales linearly with the number of commits. The work is run through `par-each` (parallelised across cores, then sorted back into order), which hides much of the latency but doesn't change the process count.
+- **One extra `git log` pass** - `--with-stats` and `--with-changes`. Both derive their data from each commit's diff, so they each run a *single* batched `git log` over the whole range (`--shortstat` / `--name-status`) and join the result onto the rows by hash. Cost is one extra subprocess regardless of how many commits are in the range — it does not scale with N.
+- **One git process per commit** - `--with-tag` (`git tag --contains`). The earliest tag containing a commit can't be derived from a single log pass, so this spawns a subprocess **for every row in the range**, parallelised with `par-each`. This is the only flag whose process count scales linearly with the number of commits.
 
-So a 1000-commit range with no flags - or with only the free ones - is one `git log`; the same range with `--with-stats` is one `git log` plus 1000 `git show` invocations. Reach for the per-commit flags on the rows you actually need (filter the range, or `where`/`first` before deciding), and combine them in a single `list` call so the base log isn't walked more than once.
-
+So a 1000-commit range with no flags - or with only the free ones - is one `git log`; with `--with-stats --with-changes` it's three `git log` passes total; only `--with-tag` adds a process per commit. Reach for `--with-tag` on the rows you actually need (filter the range, or `where`/`first` before deciding).
 
 ## Spec conformance
 
@@ -219,14 +239,14 @@ def next-bump [last_tag?: string]: nothing -> string {
         }
     ) | where conventional
 
-    if ($commits | any {$in.breaking})                            { 'major' }
-    else if ($commits | any {$in.type == 'feat'})                 { 'minor' }
-    else if ($commits | any {$in.type in [fix perf refactor]})    { 'patch' }
-    else                                                          { 'none'  }
+    if ($commits | any {$in.breaking})                            { 3 } # major
+    else if ($commits | any {$in.type == 'feat'})                 { 2 } #'minor
+    else if ($commits | any {$in.type in [fix perf refactor]})    { 1 } # patch
+    else                                                          { 0 } # no bump
 }
 
 let bump = next-bump $last_tag
-if $bump == 'none' { print 'no release-worthy changes since last tag'; exit 0 }
+if $bump == null { print 'no release-worthy changes since last tag'; return }
 print $'next release: ($bump)'
 ```
 

@@ -307,33 +307,47 @@ export def list [
     } | sort-by idx | get row
   }
 
+  # `--with-stats` / `--with-changes` derive their data from the diff of
+  # each commit. Rather than spawn one `git show` per row (O(N) processes),
+  # each enrichment makes a SINGLE `git log` pass over the same range and
+  # builds a hash-keyed lookup. The format prefixes every commit with a
+  # record-separator (`%x1e`) so the per-commit blocks can be split apart;
+  # `--diff-merges=dense-combined` matches `git show`'s default handling of
+  # merge commits (combined diff), so output is unchanged from the old path.
+  let rs = char --unicode '1e'
+
   let rows = if not $with_stats { $rows } else {
-    $rows | enumerate | par-each {|er|
-      let r = $er.item
-      let s = ^git show --shortstat --format='' $r.hash | complete
-      let stat_line = if $s.exit_code == 0 {
-        $s.stdout | lines | where {|l| $l =~ 'changed'} | first | default ''
-      } else { '' }
-      let pick = {|pat|
-        let m = $stat_line | parse --regex $pat
-        if ($m | is-empty) { 0 } else { $m | first | get n | into int }
+    let res = ^git --no-pager log --diff-merges=dense-combined --shortstat $"--pretty=format:($rs)%H" ...$range | complete
+    let stats = if $res.exit_code != 0 { {} } else {
+      $res.stdout | split row $rs | where {|c| ($c | str trim | is-not-empty)} | reduce --fold {} {|c, acc|
+        let ls = $c | lines
+        let stat_line = $ls | where {|l| $l =~ 'changed'} | first | default ''
+        let pick = {|pat|
+          let m = $stat_line | parse --regex $pat
+          if ($m | is-empty) { 0 } else { $m | first | get n | into int }
+        }
+        $acc | insert ($ls | first) {
+          files_changed: (do $pick '(?P<n>\d+) files? changed')
+          insertions: (do $pick '(?P<n>\d+) insertions?')
+          deletions: (do $pick '(?P<n>\d+) deletions?')
+        }
       }
-      let enriched = $r
-      | insert files_changed (do $pick '(?P<n>\d+) files? changed')
-      | insert insertions    (do $pick '(?P<n>\d+) insertions?')
-      | insert deletions     (do $pick '(?P<n>\d+) deletions?')
-      {idx: $er.index, row: $enriched}
-    } | sort-by idx | get row
+    }
+    let zero = {files_changed: 0, insertions: 0, deletions: 0}
+    $rows | each {|r|
+      let s = $stats | get -o $r.hash | default $zero
+      $r | insert files_changed $s.files_changed | insert insertions $s.insertions | insert deletions $s.deletions
+    }
   }
 
-  let rows = if not $with_changes { $rows } else { 
+  let rows = if not $with_changes { $rows } else {
     let tab = char tab
-    $rows | enumerate | par-each {|er|
-      let r = $er.item
-      let s = ^git show --name-status --format='' $r.hash | complete
-      let empty = {added: [], modified: [], deleted: []}
-      let buckets = if $s.exit_code == 0 {
-        $s.stdout | lines | where {|l| ($l | str trim | is-not-empty)} | reduce --fold $empty {|line, acc|
+    let empty = {added: [], modified: [], deleted: []}
+    let res = ^git --no-pager log --diff-merges=dense-combined --name-status $"--pretty=format:($rs)%H" ...$range | complete
+    let changes = if $res.exit_code != 0 { {} } else {
+      $res.stdout | split row $rs | where {|c| ($c | str trim | is-not-empty)} | reduce --fold {} {|c, acc|
+        let ls = $c | lines
+        let buckets = $ls | skip 1 | where {|l| ($l | str trim | is-not-empty)} | reduce --fold $empty {|line, b|
           let parts = $line | split row $tab
           # `--name-status` emits `<S>\t<path>` for A/M/D/T/U and
           # `<S><score>\t<old>\t<new>` for R/C. Renamed/copied files
@@ -346,15 +360,18 @@ export def list [
             $parts | get 1? | default ''
           }
           match $status {
-            'A' => ($acc | update added ($acc.added | append $path))
-            'D' => ($acc | update deleted ($acc.deleted | append $path))
-            _   => ($acc | update modified ($acc.modified | append $path))
+            'A' => ($b | update added ($b.added | append $path))
+            'D' => ($b | update deleted ($b.deleted | append $path))
+            _   => ($b | update modified ($b.modified | append $path))
           }
         }
-      } else { $empty }
-      let enriched = $r | insert added $buckets.added | insert modified $buckets.modified | insert deleted $buckets.deleted
-      {idx: $er.index, row: $enriched}
-    } | sort-by idx | get row
+        $acc | insert ($ls | first) $buckets
+      }
+    }
+    $rows | each {|r|
+      let b = $changes | get -o $r.hash | default $empty
+      $r | insert added $b.added | insert modified $b.modified | insert deleted $b.deleted
+    }
   }
 
   mut drop = []
