@@ -25,18 +25,28 @@ def "accepts type with scope and ! breaking marker" [] {
 }
 
 @test
-def "accepts every type in the default Angular whitelist" [] {
+def "accepts the common Angular types out of the box" [] {
     for t in [feat fix docs style refactor perf test build ci chore revert] {
         assert equal ($"($t): x" | is-conventional) true
     }
 }
 
 @test
+def "accepts arbitrary types by default" [] {
+    # With no `valid-types` policy, any letter-only type is conventional,
+    # matching the spec — it reserves meaning only for feat/fix (rule 14).
+    assert equal ('wip: stuff' | is-conventional) true
+    assert equal ('hotfix: it' | is-conventional) true
+}
+
+@test
 def "rejects types outside the configured whitelist" [] {
-    # `wip` / `hotfix` are not part of the Angular default — the parser
-    # consults `valid-types`, so out-of-policy types are non-conventional.
-    assert equal ('wip: stuff' | is-conventional) false
-    assert equal ('hotfix: it' | is-conventional) false
+    # Once `valid-types` is set, the parser enforces it — out-of-policy
+    # types become non-conventional.
+    with-env {CONVENTIONAL_COMMIT_VALID_TYPES: [feat fix]} {
+        assert equal ('wip: stuff' | is-conventional) false
+        assert equal ('hotfix: it' | is-conventional) false
+    }
 }
 
 @test

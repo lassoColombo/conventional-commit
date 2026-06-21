@@ -5,8 +5,8 @@ use ../mod.nu *
 # ---------- default ----------
 
 @test
-def "returns the Angular convention by default" [] {
-    assert equal (valid-types) [feat fix docs style refactor perf test build ci chore revert]
+def "is unrestricted by default" [] {
+    assert equal (valid-types) []
 }
 
 # ---------- env override ----------
@@ -40,16 +40,17 @@ def "tolerates mixed whitespace and commas in the string form" [] {
 }
 
 @test
-def "empty-string env var falls back to the default" [] {
+def "empty-string env var means unrestricted" [] {
     with-env {CONVENTIONAL_COMMIT_VALID_TYPES: ""} {
-        assert equal (valid-types) [feat fix docs style refactor perf test build ci chore revert]
+        assert equal (valid-types) []
     }
 }
 
 # ---------- usage shape ----------
 
 @test
-def "result is a flat list of strings" [] {
-    let t = valid-types
-    assert equal ($t | describe) "list<string>"
+def "a configured policy is a flat list of strings" [] {
+    with-env {CONVENTIONAL_COMMIT_VALID_TYPES: [feat fix]} {
+        assert equal (valid-types | describe) "list<string>"
+    }
 }

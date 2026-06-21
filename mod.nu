@@ -57,53 +57,63 @@ def decode-footers [lines: list<string>] {
   }
 }
 
-# The project's allowed type list. This is the **source of truth** for
-# what counts as a conventional commit — `is-conventional` and `decode`
-# both build their subject regex from this list.
+# The project's allowed type list — an **optional** policy overlay.
 #
-# Returns the value of `$env.CONVENTIONAL_COMMIT_VALID_TYPES` when set,
-# accepting either a `list<string>` or a comma/space-separated string
-# (env vars set from POSIX shells are always strings). Falls back to
-# the Angular convention when unset or empty.
+# By default this is empty, meaning *no restriction*: any letter-only
+# type is conventional, matching the spec, which reserves meaning only
+# for `feat`/`fix` and otherwise leaves the type set open (rule 14).
+#
+# Set `$env.CONVENTIONAL_COMMIT_VALID_TYPES` to enforce a closed set —
+# `is-conventional` and `decode` then reject any type outside it. The
+# value may be a `list<string>` or a comma/space-separated string (env
+# vars set from POSIX shells are always strings). An unset or empty
+# value means "unrestricted" and returns `[]`.
 @category conventional-commits
 @search-terms types allowed policy valid convention whitelist
-@example "default (Angular convention)" { ccommit valid-types }
+@example "default — unrestricted (any type valid)" { ccommit valid-types } --result []
 @example "with project override" { with-env {CONVENTIONAL_COMMIT_VALID_TYPES: 'feat fix chore'} { ccommit valid-types } } --result [feat fix chore]
-@example "validate a type" { 'feat' in (ccommit valid-types) } --result true
 export def valid-types []: nothing -> list<string> {
   let raw = $env.CONVENTIONAL_COMMIT_VALID_TYPES? | default null
-  let default = [feat fix docs style refactor perf test build ci chore revert]
-  let parsed = if ($raw | is-empty) {
-    $default
+  if ($raw | is-empty) {
+    []
   } else if (($raw | describe) | str starts-with 'list') {
     $raw
   } else {
     # Comma/space-separated string form, for shell-friendly setup.
     $raw | split row --regex '[\s,]+' | where {|s| ($s | str trim | is-not-empty)}
   }
-  if ($parsed | is-empty) { $default } else { $parsed }
 }
 
-# Build the subject-line regex from `valid-types`. Types are joined as an
-# alternation (`feat|fix|...`) sorted longest-first so the regex engine
-# can't accept a shorter type as a prefix of a longer one
-# (`fix` vs `fixtures`, etc.).
+# Build the subject-line regex from `valid-types`. When a policy list is
+# configured the types are joined as an alternation (`feat|fix|...`)
+# sorted longest-first so the regex engine can't accept a shorter type
+# as a prefix of a longer one (`fix` vs `fixtures`, etc.). When the list
+# is empty (the default), the type slot matches any letter-only token —
+# the spec only requires the type to be a noun (rule 14), not a member
+# of a fixed set.
 def subject-regex []: nothing -> string {
-  let types = valid-types | sort-by {|t| $t | str length} --reverse | str join '|'
-  {types: $types} | format pattern r#'^(?P<type>({types}))(?:\((?P<scope>[^)]+)\))?(?P<breaking>!)?: (?P<description>.+)$'#
+  let types = valid-types
+  let type_pat = if ($types | is-empty) {
+    '[a-zA-Z]+'
+  } else {
+    $types | sort-by {|t| $t | str length} --reverse | str join '|'
+  }
+  {types: $type_pat} | format pattern r#'^(?P<type>({types}))(?:\((?P<scope>[^)]+)\))?(?P<breaking>!)?: (?P<description>.+)$'#
 }
 
 # Check whether the piped message has a conformant subject line.
 #
 # Only the first line is inspected — body and footers are ignored.
-# The type must appear in `valid-types`; matching is case-insensitive
-# (spec rule 15). A message with a `BREAKING CHANGE` footer but a
-# non-conformant header still returns false.
+# By default any letter-only type is accepted (matching the spec); when
+# `valid-types` is configured, the type must appear in it. Matching is
+# case-insensitive (spec rule 15). A message with a `BREAKING CHANGE`
+# footer but a non-conformant header still returns false.
 @category conventional-commits
 @search-terms validate check conventional
 @example "valid feat" { 'feat(ui): add picker' | ccommit is-conventional } --result true
 @example "case-insensitive" { 'FIX: typo' | ccommit is-conventional } --result true
-@example "out-of-policy type" { 'wip: stuff' | ccommit is-conventional } --result false
+@example "any type valid by default" { 'wip: stuff' | ccommit is-conventional } --result true
+@example "out-of-policy type when configured" { with-env {CONVENTIONAL_COMMIT_VALID_TYPES: 'feat fix'} { 'wip: stuff' | ccommit is-conventional } } --result false
 export def is-conventional []: string -> bool {
   $in | lines | first | default '' | $in =~ ('(?i)' + (subject-regex))
 }

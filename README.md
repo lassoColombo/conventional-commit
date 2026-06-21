@@ -1,13 +1,13 @@
 # conventional-commit
 
-[Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) for Nushell
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) for Nushell
 
 Parse a message into structured pieces, encode a record back into a message, and walk git ranges.
 
 ## Why?
 
-Because answering questions like `which breaking changes shipped between v1.4.0 and v1.5.0?` using grep and regexes goes wrong quickly.
-This module provides functions that parse conventional commits into predictable, structured data, according to the official specification.
+Because answering questions like `which breaking changes shipped between v1.4.0 and v1.5.0?` using grep and regexes goes wrong quickly.  
+This module provides functions that parse conventional commits into predictable, structured data, according to the official specification.  
 It allows you to answer those types of questions with ease, and precision:
 ```nu
 conventional-commit list v1.4.0 v1.5.0 | where breaking | get hash 
@@ -32,19 +32,15 @@ use conventional-commit
 
 # validity check
 'feat(ui): add picker' | conventional-commit is-conventional
-# => true
 
 # full parse
 'feat(ui)!: rework picker' | conventional-commit decode
-# => { type: feat, scope: ui, breaking: true, description: 'rework picker', ... }
 
 # encode a record back into a message (inverse of decode)
 {type: feat, scope: api, breaking: true, description: 'drop /v1'} | conventional-commit encode
-# => 'feat(api)!: drop /v1'
 
 # walk a git range
 conventional-commit list HEAD~10 HEAD
-# => table<hash, author, date, subject, type, scope, breaking, description, body, footers, conventional>
 ```
 
 ## Parsed shape
@@ -74,7 +70,6 @@ conventional-commit list HEAD~10 HEAD
 | `conventional-commit decode` | `string -> record` | Full structured parse. Returns the same shape for conventional and non-conventional input. |
 | `conventional-commit encode` | `record -> string` | Inverse of `decode`. Renders a structured record back into a Conventional Commits string. |
 | `conventional-commit list` | `[from?: string, to: string = HEAD] -> table` | Walk `git log <from>..<to>` and parse each commit. Omit `from` to walk full history. Optional flags add decoration columns (author email, committer, merge info, GPG status, containing tag, diff stats, per-file change buckets). |
-| `conventional-commit valid-types` | `nothing -> list<string>` | Project-policy type list. Reads `$env.CONVENTIONAL_COMMIT_VALID_TYPES` (list or comma/space-separated string) or falls back to the Angular convention. **`is-conventional` and `decode` both consult this list** — a type that isn't in it is treated as non-conventional. |
 
 ### `conventional-commit encode` round-trip
 
@@ -117,20 +112,31 @@ Each flag opts the corresponding column(s) into the output. Default `list` is un
 | `--with-changes` | `added: list<string>, modified: list<string>, deleted: list<string>` | `git show --name-status` per row, bucketed by status code (renames/copies land in `modified` under their new path) |
 
 
-## Project-policy type list
+#### Performance
 
-`valid-types` is the **source of truth** for what counts as a conventional commit. `is-conventional` and `decode` both build their subject regex from this list — a commit whose type isn't in the list parses as non-conventional. The spec itself would accept any letter-only type (rule 14), but in practice every team wants a closed set: this module makes that closed set explicit and configurable.
+The flags fall into two cost tiers:
 
-```nu
-conventional-commit valid-types
-# => [feat fix docs style refactor perf test build ci chore revert]   # Angular default
-```
+- **Free** — `--with-email`, `--with-committer`, `--with-merge-info`, `--with-signature`. The base `list` already fetches every one of these fields in its single `git log` call (`%ae`, `%cn`/`%ce`/`%cI`, `%P`, `%G?`). The flag only decides whether the column is kept; toggling it adds **no extra work**. Default `list` simply rejects these columns at the end.
+- **One git process per commit** — `--with-tag` (`git tag --contains`), `--with-stats` (`git show --shortstat`), `--with-changes` (`git show --name-status`). These can't be batched into the initial `git log`, so each spawns a subprocess **for every row in the range**. Cost scales linearly with the number of commits. The work is run through `par-each` (parallelised across cores, then sorted back into order), which hides much of the latency but doesn't change the process count.
 
-Override it via `$env.CONVENTIONAL_COMMIT_VALID_TYPES`. Both a list and a comma/space-separated string are accepted (env vars set from POSIX shells are always strings):
+So a 1000-commit range with no flags — or with only the free ones — is one `git log`; the same range with `--with-stats` is one `git log` plus 1000 `git show` invocations. Reach for the per-commit flags on the rows you actually need (filter the range, or `where`/`first` before deciding), and combine them in a single `list` call so the base log isn't walked more than once.
+
+
+## Spec conformance
+
+This module adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). The spec reserves the meaning of `feat`, `fix`, and `BREAKING CHANGE` but leaves the type set open — any noun is a valid type (rule 14). **By default this module does the same: any letter-only type is conventional**, so `feat: x`, `wip: x`, and `hotfix: x` all parse as conventional.
+
+On top of that, you can **optionally overlay a closed set of allowed types** to enforce a team policy — set `$env.CONVENTIONAL_COMMIT_VALID_TYPES` and any type outside it is treated as non-conventional.
+
+### Project-policy type list
+
+By default `is-conventional` and `decode` accept any letter-only type, matching the spec. Setting `$env.CONVENTIONAL_COMMIT_VALID_TYPES` turns the type slot into a closed set: both functions build their subject regex from your list, and a commit whose type isn't in it parses as non-conventional. This is a policy overlay, opt-in per project — unset means unrestricted.
+
+A common choice is the [Angular convention](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#type). Both a list and a comma/space-separated string are accepted (env vars set from POSIX shells are always strings):
 
 ```nu
 # Nushell config — list form
-$env.CONVENTIONAL_COMMIT_VALID_TYPES = [feat fix chore docs ops]
+$env.CONVENTIONAL_COMMIT_VALID_TYPES = [feat fix docs style refactor perf test build ci chore revert]
 ```
 
 ```sh
@@ -138,7 +144,7 @@ $env.CONVENTIONAL_COMMIT_VALID_TYPES = [feat fix chore docs ops]
 export CONVENTIONAL_COMMIT_VALID_TYPES="feat,fix,chore,docs,ops"
 ```
 
-With the override above, `feat: x` and `ops(infra): y` are conventional; `refactor: z` is not. Matching stays case-insensitive (spec rule 15) — `FEAT: x` still decodes to `type: feat`.
+With `feat,fix,chore,docs,ops` configured, `feat: x` and `ops(infra): y` are conventional; `refactor: z` is not. Matching stays case-insensitive (spec rule 15) — `FEAT: x` still decodes to `type: feat`.
 
 ## CI/CD recipes
 
@@ -156,11 +162,12 @@ def assert-conventional [base: string = 'origin/main'] {
 }
 ```
 
-For a stricter policy that also rejects types outside your team's whitelist — `valid-types` reads `$env.CONVENTIONAL_COMMIT_VALID_TYPES` or falls back to the Angular default:
+To also enforce a closed type set, set `$env.CONVENTIONAL_COMMIT_VALID_TYPES` for the run — out-of-policy types then fail the `conventional` check above, so `assert-conventional` already covers them. If you want a distinct error that names the disallowed type, read the same env var directly:
 
 ```nu
 def assert-valid-types [base: string = 'origin/main'] {
-    let allowed = conventional-commit valid-types
+    let allowed = $env.CONVENTIONAL_COMMIT_VALID_TYPES? | default [] | into-types
+    if ($allowed | is-empty) { return }   # no policy configured — nothing to enforce
     let violations = conventional-commit list $base HEAD
         | where conventional and ($it.type not-in $allowed)
     if ($violations | is-empty) { return }
@@ -168,6 +175,8 @@ def assert-valid-types [base: string = 'origin/main'] {
     error make --unspanned {msg: $"disallowed type — allowed: ($allowed | str join ', ')"}
 }
 ```
+
+(`into-types` here is whatever normalizes the env var to a list — e.g. `if ($in | describe) =~ '^list' { $in } else { $in | split row --regex '[\s,]+' }` — mirroring how the module parses it.)
 
 ### Skip CI when no commit is build-worthy
 

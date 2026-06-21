@@ -208,12 +208,23 @@ def "conventional record has all expected fields" [] {
 # ---------- type-whitelist gating ----------
 
 @test
-def "type outside the whitelist makes the commit non-conventional" [] {
+def "arbitrary types decode as conventional by default" [] {
+    # No policy configured — any letter-only type is conventional.
     let p = ('wip: stuff' | decode)
-    assert equal $p.conventional false
-    assert equal $p.type null
-    # subject is still preserved verbatim
-    assert equal $p.subject "wip: stuff"
+    assert equal $p.conventional true
+    assert equal $p.type "wip"
+    assert equal $p.description "stuff"
+}
+
+@test
+def "type outside a configured whitelist makes the commit non-conventional" [] {
+    with-env {CONVENTIONAL_COMMIT_VALID_TYPES: [feat fix]} {
+        let p = ('wip: stuff' | decode)
+        assert equal $p.conventional false
+        assert equal $p.type null
+        # subject is still preserved verbatim
+        assert equal $p.subject "wip: stuff"
+    }
 }
 
 @test
