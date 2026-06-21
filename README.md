@@ -29,7 +29,7 @@ Parse a message into structured pieces, encode a record back into a message, and
 Because answering questions like `which breaking changes shipped between v1.4.0 and v1.5.0?` is more difficult than it should be.
 
 This module provides functions that parse conventional commits into predictable, structured data, according to the official specification.  
-It allows you to answer those types of questions with ease, and precision:
+It allows you to answer those types of questions with ease and precision:
 ```nu
 ccommit list v1.4.0 v1.5.0 | where breaking | get hash 
 ```
