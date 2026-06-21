@@ -97,8 +97,8 @@ def "parses a row with body and footers, preserving multi-line message" [] {
     assert equal $row.description "retry on 503"
     assert equal $row.body "The upstream returns 503 during deploys."
     assert equal ($row.footers | length) 2
-    assert equal $row.footers.0 {token: "Refs", value: "42"}
-    assert equal $row.footers.1 {token: "Reviewed-by", value: "alice"}
+    assert equal $row.footers.0 {token: "Refs", sep: " #", value: "42"}
+    assert equal $row.footers.1 {token: "Reviewed-by", sep: ": ", value: "alice"}
 }
 
 @test

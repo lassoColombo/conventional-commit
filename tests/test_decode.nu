@@ -126,14 +126,14 @@ def "whitespace-only lines are treated as blank for paragraph splitting" [] {
 def "collects footers with colon-space separator" [] {
     let p = ("feat: x\n\nbody\n\nRefs: 42\nReviewed-by: alice" | decode)
     assert equal ($p.footers | length) 2
-    assert equal $p.footers.0 {token: "Refs", value: "42"}
-    assert equal $p.footers.1 {token: "Reviewed-by", value: "alice"}
+    assert equal $p.footers.0 {token: "Refs", sep: ": ", value: "42"}
+    assert equal $p.footers.1 {token: "Reviewed-by", sep: ": ", value: "alice"}
 }
 
 @test
 def "collects footers with space-hash separator" [] {
     let p = ("feat: x\n\nbody\n\nRefs #42" | decode)
-    assert equal $p.footers.0 {token: "Refs", value: "42"}
+    assert equal $p.footers.0 {token: "Refs", sep: " #", value: "42"}
 }
 
 @test
@@ -162,7 +162,7 @@ def "footer-shaped line without a blank line above is NOT a footer" [] {
 @test
 def "BREAKING CHANGE footer survives in the footers table" [] {
     let p = ("feat: x\n\nBREAKING CHANGE: drop /v1" | decode)
-    assert equal $p.footers.0 {token: "BREAKING CHANGE", value: "drop /v1"}
+    assert equal $p.footers.0 {token: "BREAKING CHANGE", sep: ": ", value: "drop /v1"}
 }
 
 # ---------- shape preservation ----------

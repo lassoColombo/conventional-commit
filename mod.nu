@@ -37,8 +37,11 @@ def split-message [msg: string] {
   }
 }
 # Parse already-identified footer-block lines into a table of
-# {token, value} records. Lines that don't start a new footer are
-# appended as continuation to the previous footer's value.
+# {token, sep, value} records. `sep` is the literal separator the footer
+# used — `': '` or `' #'` — kept so `encode` can reproduce it exactly
+# (`Closes #42` round-trips instead of collapsing to `Closes: 42`). Lines
+# that don't start a new footer are appended as continuation to the
+# previous footer's value.
 def decode-footers [lines: list<string>] {
   $lines | reduce --fold [] {|line, acc|
     let m = $line | parse --regex $FOOTER_REGEX
@@ -47,12 +50,12 @@ def decode-footers [lines: list<string>] {
         $acc
       } else {
         let prev = $acc | last
-        let merged = {token: $prev.token, value: ($prev.value + "\n" + $line)}
+        let merged = {token: $prev.token, sep: $prev.sep, value: ($prev.value + "\n" + $line)}
         $acc | drop 1 | append $merged
       }
     } else {
       let r = $m | first
-      $acc | append {token: $r.token, value: $r.value}
+      $acc | append {token: $r.token, sep: $r.sep, value: $r.value}
     }
   }
 }
@@ -129,7 +132,8 @@ export def is-conventional []: string -> bool {
 #   - subject      — the raw first line of the message
 #   - description  — text after `: ` (spec rule 5), or null otherwise
 #   - body         — body paragraphs joined with `\n\n`, or null
-#   - footers      — table<token: string, value: string>
+#   - footers      — table<token: string, sep: string, value: string>; `sep`
+#                    is the literal `': '` or `' #'` the footer used
 #   - conventional — true when the subject line conforms
 @category conventional-commits
 @search-terms parse split decompose conventional
@@ -187,8 +191,15 @@ export def decode []: string -> record {
 #   - description  — required when `type` is set
 #   - body         — emitted after one blank line; pre-joined with `\n\n`
 #                    between paragraphs (the shape `decode` produces)
-#   - footers      — emitted after one blank line, one per line, with `: `
-#                    separator. The alternate ` #` separator is NOT preserved.
+#   - footers      — emitted after one blank line, one per line, using each
+#                    footer's `sep` (the `': '` or `' #'` captured by `decode`)
+#                    so the original separator round-trips. Records without a
+#                    `sep` field default to `': '`.
+#
+# Honours the `valid-types` policy: when `$env.CONVENTIONAL_COMMIT_VALID_TYPES`
+# is configured and `type` is set but outside it, `encode` errors rather than
+# emit a string `decode` would reject under the same policy. The check is
+# case-insensitive (spec rule 15), matching `decode`/`is-conventional`.
 @category conventional-commits
 @search-terms format render serialize build conventional
 @example "basic" { {type: feat, description: "add picker"} | ccommit encode } --result "feat: add picker"
@@ -210,6 +221,13 @@ export def encode []: record -> string {
     if ($description | is-empty) {
       error make --unspanned {msg: "encode: `description` is required when `type` is set"}
     }
+    # Enforce the project-policy type list when one is configured, so that
+    # `encode` can't mint a header `decode` would mark non-conventional under
+    # the same policy. Comparison is case-insensitive (spec rule 15).
+    let allowed = valid-types
+    if ($allowed | is-not-empty) and (($type | str downcase) not-in ($allowed | each { str downcase })) {
+      error make --unspanned {msg: $"encode: type '($type)' is not in CONVENTIONAL_COMMIT_VALID_TYPES \(($allowed | str join ', '))"}
+    }
     let scope_part = if ($scope | is-empty) { '' } else { '(' + $scope + ')' }
     # If a BREAKING (CHANGE|-CHANGE) footer is already present, the
     # spec considers that sufficient — suppress `!` for the canonical
@@ -221,7 +239,7 @@ export def encode []: record -> string {
 
   let body_part = if ($body | is-empty) { '' } else { "\n\n" + $body }
   let footer_part = if ($footers | is-empty) { '' } else {
-    "\n\n" + ($footers | each {|f| $"($f.token): ($f.value)"} | str join "\n")
+    "\n\n" + ($footers | each {|f| $"($f.token)($f.sep? | default ': ')($f.value)"} | str join "\n")
   }
 
   $subject + $body_part + $footer_part

@@ -1,4 +1,4 @@
-# conventional-commit
+# conventional-commit (ccommit)
 
 [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) module for Nushell.
 
@@ -38,7 +38,7 @@ ccommit list v1.4.0 v1.5.0 | where breaking | get hash
 
 ```nu
 # clone into one of your NU_LIB_DIRS
-let dest = [($env.NU_LIB_DIRS | first) ccommit] | path join
+let dest = [($env.NU_LIB_DIRS | first) ccommit] | path join # I like to call it ccommit
 git clone git@github.com:lassoColombo/conventional-commit.git $dest
 
 # use the module
@@ -76,7 +76,7 @@ ccommit list HEAD~10 HEAD
   subject:      string          # the raw first line
   description:  string | null   # text after `: ` (spec rule 5), or null
   body:         string | null   # body paragraphs joined with `\n\n`, or null
-  footers:      table<token: string, value: string>
+  footers:      table<token: string, sep: string, value: string>   # sep is the literal `: ` or ` #` the footer used
   conventional: bool            # true when the subject line conforms
 }
 ```
@@ -105,7 +105,8 @@ Notes on the canonical minimal form:
 
 - When `type` is null/missing, the raw `subject` field is emitted verbatim - so non-conventional decodes still round-trip.
 - When `breaking: true` AND a `BREAKING CHANGE` / `BREAKING-CHANGE` footer is present, the `!` marker is suppressed (the footer alone is sufficient per rules 11, 16). This means `feat!: x\n\nBREAKING CHANGE: y` collapses to `feat: x\n\nBREAKING CHANGE: y` on a decode → encode round-trip.
-- Footers are always emitted with the `: ` separator; the alternate ` #` separator is not preserved.
+- Footers are emitted with the separator `decode` captured in each footer's `sep` field (`: ` or ` #`), so `Closes #42` round-trips intact. A hand-built footer record with no `sep` field defaults to `: `.
+- The [project-policy type list](#project-policy-type-list) is honoured: when `$env.CONVENTIONAL_COMMIT_VALID_TYPES` is set and `type` is outside it, `encode` errors rather than emit a header `decode` would reject under the same policy. The check is case-insensitive (spec rule 15).
 
 ### `ccommit list` ranges
 
@@ -115,8 +116,9 @@ Notes on the canonical minimal form:
 ccommit list                    # full history
 ccommit list HEAD~10            # last 10 commits
 ccommit list v1.4.0 v1.5.0      # commits between two tags
-ccommit list main..feature/x    # also works - pass any single revspec as `from`
 ```
+
+`from` and `to` are each resolved as a single revision; pass them as two arguments rather than embedding a `..` range in `from`.
 
 ### `list` decoration flags
 
@@ -151,7 +153,7 @@ On top of that, you can **optionally overlay a closed set of allowed types** to 
 
 ### Project-policy type list
 
-By default `is-conventional` and `decode` accept any letter-only type, matching the spec. Setting `$env.CONVENTIONAL_COMMIT_VALID_TYPES` turns the type slot into a closed set: both functions build their subject regex from your list, and a commit whose type isn't in it parses as non-conventional. This is a policy overlay, opt-in per project - unset means unrestricted.
+By default `is-conventional` and `decode` accept any letter-only type, matching the spec. Setting `$env.CONVENTIONAL_COMMIT_VALID_TYPES` turns the type slot into a closed set: both functions build their subject regex from your list, and a commit whose type isn't in it parses as non-conventional. `encode` honours the same policy in the other direction - it errors on an out-of-policy type rather than mint a header `decode` would then reject. This is a policy overlay, opt-in per project - unset means unrestricted.
 
 A common choice is the [Angular convention](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#type). Both a list and a comma/space-separated string are accepted (env vars set from POSIX shells are always strings):
 
