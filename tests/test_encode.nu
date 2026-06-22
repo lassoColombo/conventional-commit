@@ -16,7 +16,55 @@ def "wraps scope in parens" [] {
 
 @test
 def "adds bang for a breaking change" [] {
-    assert equal ({type: feat, scope: api, breaking: true, description: "drop /v1"} | encode) "feat(api)!: drop /v1"
+    assert equal ({type: feat, scope: api, breaking: true, bang: true, description: "drop /v1"} | encode) "feat(api)!: drop /v1"
+}
+
+# ---------- breaking signals: bang emits the `!`, footer alone does not ----------
+
+@test
+def "the ! comes from bang, not from a breaking footer" [] {
+    # Breaking via the footer alone — bang false, so no `!` in the header.
+    let r = {type: feat, description: "x", breaking: true, footers: [{token: "BREAKING CHANGE", sep: ": ", value: "y"}]}
+    assert equal ($r | encode) "feat: x\n\nBREAKING CHANGE: y"
+}
+
+@test
+def "round-trips a ! marker alongside a BREAKING CHANGE footer" [] {
+    # `bang` is captured and reproduced, so this keeps both signals.
+    let msg = "feat!: x\n\nBREAKING CHANGE: y"
+    assert equal ($msg | decode | encode) $msg
+}
+
+# ---------- breaking consistency guard ----------
+
+@test
+def "errors when breaking is true but there is no bang and no footer" [] {
+    assert error { {type: feat, breaking: true, description: "x"} | encode }
+}
+
+@test
+def "errors when bang is set but breaking is false" [] {
+    assert error { {type: feat, breaking: false, bang: true, description: "x"} | encode }
+}
+
+@test
+def "errors when a breaking footer is present but breaking is false" [] {
+    let r = {type: feat, breaking: false, description: "x", footers: [{token: "BREAKING CHANGE", sep: ": ", value: "y"}]}
+    assert error { $r | encode }
+}
+
+@test
+def "round-trips every decoded record through the guard" [] {
+    # Whatever decode produces is internally consistent, so it never trips
+    # the guard — exercised across all four breaking/bang/footer combinations.
+    for msg in [
+        "feat: plain"
+        "feat!: header bang only"
+        "feat: footer only\n\nBREAKING CHANGE: y"
+        "feat!: both\n\nBREAKING CHANGE: y"
+    ] {
+        assert equal ($msg | decode | encode) $msg
+    }
 }
 
 # ---------- required components (conventional path) ----------

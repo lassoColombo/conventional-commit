@@ -38,9 +38,8 @@ def split-message [msg: string] {
 }
 # Parse already-identified footer-block lines into a table of
 # {token, sep, value} records. `sep` is the literal separator the footer
-# used — `': '` or `' #'` — kept so `encode` can reproduce it exactly
-# (`Closes #42` round-trips instead of collapsing to `Closes: 42`). Lines
-# that don't start a new footer are appended as continuation to the
+# used — `': '` or `' #'` — kept so `encode` can reproduce it exactly.
+# Lines that don't start a new footer are appended as continuation to the
 # previous footer's value.
 def decode-footers [lines: list<string>] {
   $lines | reduce --fold [] {|line, acc|
@@ -56,6 +55,13 @@ def decode-footers [lines: list<string>] {
       $acc | append {token: $r.token, sep: $r.sep, value: $r.value}
     }
   }
+}
+
+# True when a footer table carries a breaking-change footer — the uppercase
+# `BREAKING CHANGE` or its hyphenated synonym (spec rules 11, 16). The single
+# place that token set is spelled out, shared by `decode` and `encode`.
+def has-breaking-footer [footers: list]: nothing -> bool {
+  $footers | any {|f| $f.token in ['BREAKING CHANGE' 'BREAKING-CHANGE']}
 }
 
 # The project's allowed type list — an **optional** policy overlay.
@@ -127,6 +133,12 @@ export def is-conventional []: string -> bool {
 #   - scope        — text inside parens, or null
 #   - breaking     — true when `!` is in the prefix OR a BREAKING CHANGE
 #                    / BREAKING-CHANGE footer is present (rules 11, 16)
+#   - bang         — true when the `!` marker was literally in the header.
+#                    Distinct from `breaking`, which also counts the footer:
+#                    a commit breaking *only* via footer has `breaking: true`
+#                    but `bang: false`. Keeping the two apart lets `encode`
+#                    reproduce the header exactly (a `feat!: x` with a
+#                    BREAKING CHANGE footer round-trips with its `!` intact)
 #   - subject      — the raw first line of the message
 #   - description  — text after `: ` (spec rule 5), or null otherwise
 #   - body         — body paragraphs joined with `\n\n`, or null
@@ -149,6 +161,7 @@ export def decode []: string -> record {
       type: null
       scope: null
       breaking: false
+      bang: false
       subject: $s.subject
       description: null
       body: $s.body
@@ -157,11 +170,12 @@ export def decode []: string -> record {
     }
   } else {
     let r = $m | first
-    let footer_breaking = $footers | any {$in.token in ['BREAKING CHANGE' 'BREAKING-CHANGE']}
+    let footer_breaking = has-breaking-footer $footers
     {
       type: ($r.type | str downcase)
       scope: $r.scope
       breaking: (($r.breaking == '!') or $footer_breaking)
+      bang: ($r.breaking == '!')
       subject: $s.subject
       description: $r.description
       body: $s.body
@@ -171,8 +185,31 @@ export def decode []: string -> record {
   }
 }
 
+# Reconcile a record's breaking-change signals into the header `!` marker,
+# erroring on any contradiction.
+#
+# A conventional commit is breaking *iff* it shows a `!` in the header
+# (`bang`) or carries a BREAKING CHANGE footer (spec rules 11, 16). The
+# `breaking` flag therefore holds no independent information — it's a checked
+# redundancy that must agree with that evidence. `encode` refuses to guess
+# when they disagree:
+#   - breaking, but no bang and no footer → a claim with no evidence
+#   - not breaking, but a bang or a footer → evidence with no claim
+# Returns `'!'` when the header should carry the bang, `''` otherwise.
+def breaking-marker [breaking: bool, bang: bool, footer: bool]: nothing -> string {
+  if $breaking != ($bang or $footer) {
+    let detail = if $breaking {
+      "true, but the record has no `!` marker (`bang`) and no BREAKING CHANGE footer — set `bang: true` or add the footer"
+    } else {
+      "false, but the record carries a `!` marker (`bang`) or a BREAKING CHANGE footer — set `breaking: true`, or drop the marker/footer"
+    }
+    error make --unspanned {msg: $"encode: `breaking` is ($detail)"}
+  }
+  if $bang { '!' } else { '' }
+}
+
 # Encode a structured commit record back into a Conventional Commits string.
-# Inverse of `decode`. 
+# Inverse of `decode`.
 #
 # The `conventional` field selects the path (defaults to true):
 #   - conventional (true): the subject is built *solely* from the
@@ -189,11 +226,14 @@ export def decode []: string -> record {
 #   - subject      — emitted verbatim ONLY when `conventional` is false
 #   - type         — required when conventional; the commit type (`feat`, …)
 #   - scope        — wrapped in parens when set
-#   - breaking     — when true AND no BREAKING (CHANGE|-CHANGE) footer is
-#                    present, adds `!` to the prefix. When a BREAKING footer
-#                    is present the `!` is suppressed (canonical minimal form);
-#                    this means `feat!: x\n\nBREAKING CHANGE: y` collapses to
-#                    `feat: x\n\nBREAKING CHANGE: y` on a decode→encode round
+#   - bang         — whether the header shows the literal `!`; true emits it,
+#                    false omits it (defaults to false). `decode` captures
+#                    this, so a decoded commit round-trips its header exactly
+#                    (`feat!: x` keeps its `!` even next to a breaking footer)
+#   - breaking     — the semantic breaking-change flag (defaults to false). It
+#                    is a *checked* redundancy: it must equal `bang` OR the
+#                    presence of a BREAKING (CHANGE|-CHANGE) footer. `encode`
+#                    errors on a mismatch rather than guess (rules 11, 16)
 #   - description  — required; the text after `: ` in the subject
 #   - body         — emitted after one blank line; pre-joined with `\n\n`
 #                    between paragraphs (the shape `decode` produces)
@@ -209,13 +249,14 @@ export def decode []: string -> record {
 @category conventional-commits
 @search-terms format render serialize build conventional
 @example "basic" { {type: feat, description: "add picker"} | ccommit encode } --result "feat: add picker"
-@example "with scope and breaking" { {type: feat, scope: api, breaking: true, description: "drop /v1"} | ccommit encode } --result "feat(api)!: drop /v1"
+@example "with scope and breaking" { {type: feat, scope: api, breaking: true, bang: true, description: "drop /v1"} | ccommit encode } --result "feat(api)!: drop /v1"
 @example "round-trip" { 'feat(ui): add picker' | ccommit decode | ccommit encode } --result "feat(ui): add picker"
 export def encode []: record -> string {
   let r = $in
   let type = $r.type? | default null
   let scope = $r.scope? | default null
   let breaking = $r.breaking? | default false
+  let bang = $r.bang? | default false
   let description = $r.description? | default null
   let body = $r.body? | default null
   let footers = $r.footers? | default []
@@ -247,12 +288,12 @@ export def encode []: record -> string {
       error make --unspanned {msg: $"encode: type '($type)' is not in CONVENTIONAL_COMMIT_VALID_TYPES \(($allowed | str join ', '))"}
     }
     let scope_part = if ($scope | is-empty) { '' } else { '(' + $scope + ')' }
-    # If a BREAKING (CHANGE|-CHANGE) footer is already present, the
-    # spec considers that sufficient — suppress `!` for the canonical
-    # minimal form (rules 11, 16).
-    let has_breaking_footer = $footers | any {$in.token in ['BREAKING CHANGE' 'BREAKING-CHANGE']}
-    let bang = if ($breaking and (not $has_breaking_footer)) { '!' } else { '' }
-    $"($type)($scope_part)($bang): ($description)"
+    # `breaking`, `bang`, and any BREAKING CHANGE footer must agree;
+    # `breaking-marker` enforces that and yields the `!` (or not). Because
+    # `bang` is reproduced exactly, a decoded commit round-trips its header —
+    # `feat!: x` keeps its `!` even next to a breaking footer.
+    let marker = breaking-marker $breaking $bang (has-breaking-footer $footers)
+    $"($type)($scope_part)($marker): ($description)"
   }
 
   let body_part = if ($body | is-empty) { '' } else { "\n\n" + $body }

@@ -68,6 +68,34 @@ def "breaking is true when ! and footer both present" [] {
     assert equal $p.breaking true
 }
 
+# ---------- bang: the literal `!` marker, distinct from breaking ----------
+
+@test
+def "bang tracks the literal ! marker" [] {
+    assert equal ('feat!: x' | decode | get bang) true
+    assert equal ('feat(api)!: x' | decode | get bang) true
+    assert equal ('feat: x' | decode | get bang) false
+}
+
+@test
+def "bang is false when breaking comes only from a footer" [] {
+    let p = ("feat: x\n\nBREAKING CHANGE: drop /v1" | decode)
+    assert equal $p.breaking true
+    assert equal $p.bang false
+}
+
+@test
+def "bang and breaking are both true when ! and footer coexist" [] {
+    let p = ("feat!: x\n\nBREAKING CHANGE: yep" | decode)
+    assert equal $p.bang true
+    assert equal $p.breaking true
+}
+
+@test
+def "bang is false for a non-conventional message" [] {
+    assert equal ('hello world' | decode | get bang) false
+}
+
 @test
 def "breaking is false without ! or BREAKING footer" [] {
     assert equal ('feat: x' | decode | get breaking) false
@@ -170,7 +198,7 @@ def "BREAKING CHANGE footer survives in the footers table" [] {
 @test
 def "non-conventional input keeps the same record shape" [] {
     let p = ('hello world' | decode)
-    assert equal ($p | columns) [type scope breaking subject description body footers conventional]
+    assert equal ($p | columns) [type scope breaking bang subject description body footers conventional]
     assert equal $p.type null
     assert equal $p.scope null
     assert equal $p.breaking false
@@ -202,7 +230,7 @@ def "non-conventional subject + body shape" [] {
 @test
 def "conventional record has all expected fields" [] {
     let p = ('feat: x' | decode)
-    assert equal ($p | columns) [type scope breaking subject description body footers conventional]
+    assert equal ($p | columns) [type scope breaking bang subject description body footers conventional]
 }
 
 # ---------- type-whitelist gating ----------

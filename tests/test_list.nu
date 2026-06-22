@@ -65,7 +65,7 @@ def cleanup [] {
 def "returns a table with the documented columns in order" [] {
     cd $in.repo
     let l = (list)
-    assert equal ($l | columns) [hash author date subject type scope breaking description body footers conventional]
+    assert equal ($l | columns) [hash author date subject type scope breaking bang description body footers conventional]
 }
 
 @test
@@ -213,7 +213,7 @@ def "messages containing \\x1f bytes do not corrupt columns" [] {
 def "with-email adds author_email between author and date" [] {
     cd $in.repo
     let cols = (list --with-email | columns)
-    assert equal $cols [hash author author_email date subject type scope breaking description body footers conventional]
+    assert equal $cols [hash author author_email date subject type scope breaking bang description body footers conventional]
     let row = (list --with-email | first)
     assert equal $row.author_email "test@example.invalid"
 }
@@ -222,7 +222,7 @@ def "with-email adds author_email between author and date" [] {
 def "with-committer adds committer trio after date" [] {
     cd $in.repo
     let cols = (list --with-committer | columns)
-    assert equal $cols [hash author date committer committer_email committer_date subject type scope breaking description body footers conventional]
+    assert equal $cols [hash author date committer committer_email committer_date subject type scope breaking bang description body footers conventional]
     let row = (list --with-committer | first)
     assert equal $row.committer "Test"
     assert equal $row.committer_email "test@example.invalid"
@@ -233,7 +233,7 @@ def "with-committer adds committer trio after date" [] {
 def "with-merge-info adds parents and is_merge" [] {
     cd $in.repo
     let cols = (list --with-merge-info | columns)
-    assert equal $cols [hash author date parents is_merge subject type scope breaking description body footers conventional]
+    assert equal $cols [hash author date parents is_merge subject type scope breaking bang description body footers conventional]
     # All seeded commits are linear; only the very first commit has 0 parents.
     let head = (list --with-merge-info | first)
     assert equal ($head.parents | length) 1
@@ -263,7 +263,7 @@ def "with-merge-info flags a real merge commit" [] {
 def "with-signature adds an N for unsigned commits" [] {
     cd $in.repo
     let cols = (list --with-signature | columns)
-    assert equal $cols [hash author date signature subject type scope breaking description body footers conventional]
+    assert equal $cols [hash author date signature subject type scope breaking bang description body footers conventional]
     let row = (list --with-signature | first)
     # Fixture explicitly disables gpgsign — every commit is unsigned (N).
     assert equal $row.signature "N"
@@ -273,7 +273,7 @@ def "with-signature adds an N for unsigned commits" [] {
 def "with-tag returns the earliest containing tag, or null" [] {
     cd $in.repo
     let cols = (list --with-tag | columns)
-    assert equal $cols [hash author date subject type scope breaking description body footers conventional tag]
+    assert equal $cols [hash author date subject type scope breaking bang description body footers conventional tag]
     # Commit 1-3 are contained by v1.0.0 (earlier than v1.1.0).
     let c1 = (list --with-tag | where subject == "feat(ui): add picker" | first)
     assert equal $c1.tag "v1.0.0"
@@ -297,7 +297,7 @@ def "with-tag yields null when no tag contains the commit" [] {
 def "with-stats adds files_changed / insertions / deletions" [] {
     cd $in.repo
     let cols = (list --with-stats | columns)
-    assert equal $cols [hash author date subject type scope breaking description body footers conventional files_changed insertions deletions]
+    assert equal $cols [hash author date subject type scope breaking bang description body footers conventional files_changed insertions deletions]
     let row = (list --with-stats | last)  # the first commit added a single 1-byte file
     assert equal $row.files_changed 1
     assert equal $row.insertions 1
@@ -308,7 +308,7 @@ def "with-stats adds files_changed / insertions / deletions" [] {
 def "with-changes buckets paths into added / modified / deleted" [] {
     cd $in.repo
     let cols = (list --with-changes | columns)
-    assert equal $cols [hash author date subject type scope breaking description body footers conventional added modified deleted]
+    assert equal $cols [hash author date subject type scope breaking bang description body footers conventional added modified deleted]
     # Every seeded commit adds a new file; none modify or delete.
     let row = (list --with-changes | where subject == "feat(ui): add picker" | first)
     assert equal $row.added ["a.txt"]
@@ -340,14 +340,14 @@ def "with-changes routes modify and delete actions to the right buckets" [] {
 def "combining flags produces the union of columns in stable order" [] {
     cd $in.repo
     let cols = (list --with-email --with-tag --with-stats --with-changes | columns)
-    assert equal $cols [hash author author_email date subject type scope breaking description body footers conventional tag files_changed insertions deletions added modified deleted]
+    assert equal $cols [hash author author_email date subject type scope breaking bang description body footers conventional tag files_changed insertions deletions added modified deleted]
 }
 
 @test
 def "default list without flags keeps the original 11-column shape" [] {
     cd $in.repo
     let cols = (list | columns)
-    assert equal $cols [hash author date subject type scope breaking description body footers conventional]
+    assert equal $cols [hash author date subject type scope breaking bang description body footers conventional]
 }
 
 @test
