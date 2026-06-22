@@ -23,8 +23,7 @@ Parse a message into structured pieces, encode a record back into a message, wal
    2. [Skip CI when no commit is build-worthy](#skip-ci-when-no-commit-is-build-worthy)
    3. [Build only the components touched by a merge request](#build-only-the-components-touched-by-a-merge-request)
    4. [Determine the next semver bump](#determine-the-next-semver-bump)
-   5. [Block unsigned or bad-signature commits](#block-unsigned-or-bad-signature-commits)
-   6. [Generate a release changelog](#generate-a-release-changelog)
+   5. [Generate a release changelog](#generate-a-release-changelog)
 
 # Why?
 
@@ -165,8 +164,6 @@ ccommit list HEAD~10            # last 10 commits
 ccommit list v1.4.0 v1.5.0      # commits between two tags
 ```
 
-`from` and `to` are each resolved as a single revision
-
 ### `ccommit list` decoration flags
 
 Each flag opts the corresponding column(s) into the output.
@@ -185,13 +182,7 @@ Each flag opts the corresponding column(s) into the output.
 
 # CI/CD recipes
 
-These are copy-paste starting points, not built-ins. Each is a small function that takes the commit range as explicit `from` / `to` arguments, because *how* you obtain the base and head refs is specific to your CI - there is no single right default:
-
-- **GitHub Actions** - base `origin/${{ github.base_ref }}` (or `origin/main`), head `HEAD`.
-- **GitLab CI** - base `$CI_MERGE_REQUEST_DIFF_BASE_SHA`, head `$CI_COMMIT_SHA`.
-- **Local / pre-push hook** - base `@{upstream}` or the last tag, head `HEAD`.
-
-So the recipes stay agnostic: you pass the refs in, they do the parsing. `to` defaults to `HEAD` for convenience but is always overridable.
+These are copy-paste starting points, not built-ins. Each is a small function that takes the commit range as explicit `from` / `to` arguments, because *how* you obtain the base and head refs is specific to your tools.
 
 ## Validate every commit in a pull request
 
@@ -208,8 +199,6 @@ def assert-conventional [from: string, to: string = HEAD] {
 
 # e.g. GitHub Actions:  assert-conventional origin/main HEAD
 ```
-
-To also enforce a closed type set, set `$env.CONVENTIONAL_COMMIT_VALID_TYPES` for the run - out-of-policy types then fail the `conventional` check above, so `assert-conventional` already covers them.
 
 ## Skip CI when no commit is build-worthy
 
@@ -232,7 +221,7 @@ if (build-worthy origin/main HEAD | is-empty) {
 
 ## Build only the components touched by a merge request
 
-In a monorepo where each top-level directory is an independent component, derive the touched set from the MR's commits, intersect with the components that actually exist on disk, then build only those. The filesystem lookup keeps stale paths (deleted dirs, repo-meta dirs) out:
+In a monorepo where each top-level directory is an independent component, build only the components that were touched in the current merge request - and that still exists on disk:
 
 ```nu
 # Top-level dirs that aren't meta/hidden (`_cicfg`, `.github`, …).
@@ -250,7 +239,7 @@ def touched-components [from: string, to: string = HEAD, root: path = .]: nothin
     | uniq | sort
 }
 
-for c in (touched-components origin/main HEAD) {
+touched-components origin/main HEAD | par-each {|c|
     print $"building ($c)…"
     ^make -C $c build test
 }
@@ -258,7 +247,7 @@ for c in (touched-components origin/main HEAD) {
 
 ## Determine the next semver bump
 
-Look at every conventional commit since the last tag, derive the bump level (`major` / `minor` / `patch`) from their types and breaking flags, then compute the actual next version with the [`semver`](https://github.com/lassoColombo/semver) module.
+You can use this module in combination with [`semver`](https://github.com/lassoColombo/semver) to determine the next tag based on the commits since the last one:
 
 ```nu
 use ccommit
@@ -289,59 +278,26 @@ def next-version [
 }
 ```
 
-## Block unsigned or bad-signature commits
-
-For protected branches that mandate signed commits - `G`=good, `U`=good but unknown signer (acceptable in most policies):
-
-```nu
-def assert-signed [from: string, to: string = HEAD] {
-    let unsigned = ccommit list $from $to --with-signature
-    | where signature not-in ['G' 'U']
-
-    if ($unsigned | is-empty) { return }
-    $unsigned | select hash author signature subject | print
-    error make --unspanned {msg: $"($unsigned | length) unsigned commit\(s)"}
-}
-
-# e.g.  assert-signed origin/main HEAD
-```
-
 ## Generate a release changelog
 
-Group conventional commits between two tags by type and render markdown sections. Two design choices keep the output safe and predictable:
-
-- **Section order is driven by the spec** - not by which type happens to appear first in the data - so the output is stable release-over-release.
-- **User-supplied content (description, scope) goes through an `md-escape` helper** so backticks, brackets, underscores, etc. in a description can't break the rendered markdown. The bullet is assembled via `format pattern` from pre-computed columns.
+Group conventional commits by type into markdown sections. Two small choices keep it predictable: section order follows a fixed list (stable release-over-release, not data-dependent), and every commit description is run through `md-escape` so nothing in it can break the rendering.
 
 ```nu
-# Escape characters that would otherwise break markdown rendering inside
-# a commit description: backslash, backtick, *, _, [], <, >.
 def md-escape []: string -> string {
-    $in | str replace --all --regex r#'([\\*_\[\]`<>])'# r#'\${1}'#
+    $in | str replace --all --regex r#'([!-/:-@\[-`{-~])'# r#'\${1}'#
 }
 
 def changelog [from: string, to: string = HEAD]: nothing -> string {
-    let sections = [
-        [type,     title];
-        [feat,     '✨ Features']
-        [fix,      '🐛 Bug Fixes']
-        [perf,     '⚡ Performance']
-        [refactor, '♻️ Refactoring']
-    ]
-    let commits = ccommit list $from $to
-        | where conventional
-        | insert short       {|c| $c.hash | str substring ..7}
-        | update description {|c| $c.description | md-escape}
-        | insert scope_part  {|c| if ($c.scope | is-empty) { '' } else { $"\(($c.scope | md-escape)\) "}}
-        | insert marker      {|c| if $c.breaking { ' **BREAKING**' } else { '' }}
+    let titles = {feat: '✨ Features', fix: '🐛 Bug Fixes', perf: '⚡ Performance', refactor: '♻️ Refactoring'}
+    let commits = ccommit list $from $to | where conventional
 
-    $sections | each {|s|
-        let rows = $commits | where type == $s.type
-        if ($rows | is-empty) { return null }
-        let bullets = $rows | format pattern '- {scope_part}{description}{marker} - `{short}`'
-        $"## ($s.title)\n" + ($bullets | str join "\n")
+    $titles | items {|type, title|
+        let bullets = $commits | where type == $type | each {|c|
+            let scope = if ($c.scope | is-empty) { '' } else { $"**($c.scope)** " }
+            let mark  = if $c.breaking { ' ⚠️' } else { '' }
+            $"- ($scope)($c.description | md-escape)($mark) `($c.hash | str substring ..7)`"
+        }
+        if ($bullets | is-empty) { null } else { $"## ($title)\n($bullets | str join "\n")" }
     } | compact | str join "\n\n"
 }
-
-changelog v1.4.0 v1.5.0 | save -f CHANGELOG-v1.5.0.md
 ```
