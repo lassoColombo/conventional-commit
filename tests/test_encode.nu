@@ -106,15 +106,6 @@ def "errors when the description spans multiple lines" [] {
     assert error { {type: feat, description: "line one\nline two"} | encode }
 }
 
-@test
-def "a spec-valid but out-of-policy type still encodes" [] {
-    # The guard checks the spec grammar, not the project policy — so `wip`
-    # encodes even when a policy is configured (encode stays env-independent).
-    with-env {CONVENTIONAL_COMMIT_VALID_TYPES: "feat fix"} {
-        assert equal ({type: wip, description: "stuff"} | encode) "wip: stuff"
-    }
-}
-
 # ---------- non-conventional path (conventional: false) ----------
 
 @test
@@ -160,7 +151,7 @@ def "a footer record without a sep field defaults to colon-space" [] {
     assert equal ($r | encode) "fix: x\n\nRefs: 42"
 }
 
-# ---------- type is rendered verbatim; valid-types is decode-only ----------
+# ---------- type policy: enforced on the conventional path, both directions ----------
 
 @test
 def "emits any type when no policy is configured" [] {
@@ -168,17 +159,55 @@ def "emits any type when no policy is configured" [] {
 }
 
 @test
-def "renders an out-of-policy type instead of erroring" [] {
-    # `decode` reports an out-of-policy type as `conventional: false` rather
-    # than erroring, so `encode` stays symmetric and renders it too.
+def "errors on an out-of-policy type when conventional is true" [] {
+    # encode enforces the policy with the same recognizer decode uses, so a
+    # conventional record can't claim a type decode would reject.
     with-env {CONVENTIONAL_COMMIT_VALID_TYPES: "feat fix"} {
-        assert equal ({type: wip, description: "stuff"} | encode) "wip: stuff"
+        assert error { {type: wip, description: "stuff"} | encode }
     }
 }
 
 @test
-def "renders the type verbatim, without consulting the policy" [] {
+def "an out-of-policy type round-trips via conventional false" [] {
+    # decode marks it non-conventional, so encode emits the raw subject — the
+    # escape hatch for anything outside the policy.
+    with-env {CONVENTIONAL_COMMIT_VALID_TYPES: "feat fix"} {
+        let msg = "wip: stuff"
+        assert equal ($msg | decode | encode) $msg
+    }
+}
+
+@test
+def "in-policy type encodes, with its case preserved" [] {
+    # The policy check is case-insensitive (spec rule 15); encode doesn't
+    # downcase the type the way decode does.
     with-env {CONVENTIONAL_COMMIT_VALID_TYPES: "feat fix"} {
         assert equal ({type: FEAT, description: "x"} | encode) "FEAT: x"
+    }
+}
+
+@test
+def "encode never emits a conventional header decode would reject" [] {
+    # The core invariant: encode validates its header with decode's own
+    # recognizer, so anything it accepts on the conventional path decodes back
+    # as conventional — the `conventional` field survives `encode | decode`,
+    # under the spec default and under a configured policy alike.
+    let records = [
+        {type: feat, description: "x"}
+        {type: fix, scope: api, description: "y"}
+        {type: feat, breaking: true, description: "z"}
+        {type: wip, description: "out-of-spec-default? no — letter-only is fine"}
+    ]
+    for r in $records {
+        assert equal ($r | encode | decode | get conventional) true
+    }
+    with-env {CONVENTIONAL_COMMIT_VALID_TYPES: "feat fix"} {
+        # In-policy records still round-trip their conventionality...
+        for r in ($records | first 3) {
+            assert equal ($r | encode | decode | get conventional) true
+        }
+        # ...and the only out-of-policy one is rejected outright, so it can
+        # never be emitted as a (mis-labelled) conventional header.
+        assert error { {type: wip, description: "x"} | encode }
     }
 }
