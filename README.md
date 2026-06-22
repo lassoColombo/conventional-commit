@@ -4,28 +4,6 @@
 
 Parse a message into structured pieces, encode a record back into a message, and walk git ranges.
 
-1. [conventional-commit (ccommit)](#conventional-commit-(ccommit))
-2. [Why?](#why?)
-3. [Installation](#installation)
-4. [Quick start](#quick-start)
-5. [Parsed shape](#parsed-shape)
-6. [Commands](#commands)
-   1. [`ccommit encode` round-trip](#`ccommit-encode`-round-trip)
-   2. [`ccommit list` ranges](#`ccommit-list`-ranges)
-   3. [`ccommit list` decoration flags](#`ccommit-list`-decoration-flags)
-      1. [Performance](#performance)
-7. [Spec conformance](#spec-conformance)
-   1. [Project-policy type list](#project-policy-type-list)
-8. [CI/CD recipes](#ci/cd-recipes)
-   1. [Validate every commit in a pull request](#validate-every-commit-in-a-pull-request)
-   2. [Skip CI when no commit is build-worthy](#skip-ci-when-no-commit-is-build-worthy)
-   3. [Build only the components touched by a merge request](#build-only-the-components-touched-by-a-merge-request)
-   4. [Determine the next semver bump](#determine-the-next-semver-bump)
-   5. [Block unsigned or bad-signature commits](#block-unsigned-or-bad-signature-commits)
-   6. [Generate a release changelog](#generate-a-release-changelog)
-
-
-
 # Why?
 
 Because answering questions like `which breaking changes shipped between v1.4.0 and v1.5.0?` is more difficult than it should be.
@@ -67,6 +45,30 @@ use ccommit
 ccommit list HEAD~10 HEAD
 ```
 
+# Spec conformance: what is `conventional` anyway?
+
+This module adheres to [Conventional Commits v.1.0.0](https://www.conventionalcommits.org/en/v1.0.0/).  
+
+The spec reserves the meaning of `feat`, `fix`, and `BREAKING CHANGE` but leaves the type set open - any noun is a valid type. **By default this module does the same: any letter-only type is conventional**, so `feat: x`, `wip: x`, and `asd: x` all parse as conventional.
+
+On top of that, you can **optionally overlay a closed set of allowed types** to enforce a team policy - set `$env.CONVENTIONAL_COMMIT_VALID_TYPES` and any type outside it is treated as non-conventional.
+
+## Project-policy type list
+
+By default `is-conventional` and `decode` accept any letter-only type, matching the spec. Setting `$env.CONVENTIONAL_COMMIT_VALID_TYPES` turns the type slot into a closed set: both functions build their subject regex from your list, and a commit whose type isn't in it decodes as non-conventional. The policy is a decode-side concern only — `encode` never consults it and won't error on an out-of-policy type, keeping the two directions symmetric.
+
+In this readme we will use types defined in the [Angular convention](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#type). 
+
+`$env.CONVENTIONAL_COMMIT_VALID_TYPES` can both be a list and a comma/space-separated string:
+```nu
+# Nushell config - list form
+$env.CONVENTIONAL_COMMIT_VALID_TYPES = [feat fix docs style refactor perf test build ci chore revert]
+```
+```sh
+# POSIX shell / CI env - string form
+export CONVENTIONAL_COMMIT_VALID_TYPES="feat,fix,chore,docs,ops"
+```
+
 # Parsed shape
 
 `ccommit decode` always returns this record. Fields are nullable so non-conventional input is still safe to consume:
@@ -77,7 +79,7 @@ ccommit list HEAD~10 HEAD
   scope:        string | null   # text inside parens, or null
   breaking:     bool            # true when `!` is in the prefix OR a BREAKING CHANGE footer is present
   bang:         bool            # true when the `!` marker was literally in the header (≠ breaking, which also counts the footer)
-  subject:      string          # the raw first line (derived; read-only — see encode note)
+  subject:      string          # the raw first line (derived; read-only - see encode note)
   description:  string | null   # text after `: ` (spec rule 5), or null
   body:         string | null   # body paragraphs joined with `\n\n`, or null
   footers:      table<token: string, sep: string, value: string>   # sep is the literal `: ` or ` #` the footer used
@@ -96,39 +98,6 @@ ccommit list HEAD~10 HEAD
 | `ccommit encode` | `record -> string` | Inverse of `decode`. Renders a structured record back into a Conventional Commits string. |
 | `ccommit list` | `[from?: string, to: string = HEAD] -> table` | Walk `git log <from>..<to>` and parse each commit. Omit `from` to walk full history. Optional flags add decoration columns (author email, committer, merge info, GPG status, containing tag, diff stats, per-file change buckets). |
 
-## `ccommit encode` round-trip
-
-`encode` and `decode` are inverses, and that's deliberate: whatever `decode` gives you, `encode` turns back into the original message.
-
-```nu
-'feat(ui): add picker' | ccommit decode | ccommit encode
-# => 'feat(ui): add picker'
-```
-
-This is what makes the structured record safe to edit. Decode a commit, change its `scope` or `description`, encode it back, and you get a valid message.
-
-The reason it holds is that the components are the single source of truth. `encode` builds the subject line from `type`, `scope`, `breaking`, and `description` alone — so those first two are required, and any `subject` left in the record is simply ignored.
-
-The exception is a commit that was never conventional to begin with. There the header isn't a `type: description` shape, so the components have nothing to rebuild from. Setting `conventional: false` tells `encode` to emit the raw `subject` verbatim instead — the one case where `subject` is read, and what lets non-conventional commits round-trip too.
-
-Breaking changes round-trip exactly, including the `!` marker. `decode` records the literal `!` separately as `bang` (distinct from `breaking`, which also counts a `BREAKING CHANGE` footer), and `encode` reproduces `bang` verbatim — so a commit that wrote both a `!` and a footer comes back with both.
-
-The three breaking signals — `breaking`, `bang`, and a `BREAKING CHANGE` / `BREAKING-CHANGE` footer — can't be set independently, because they aren't independent: a commit is breaking *iff* it has a `!` or a breaking footer. `breaking` is therefore a checked redundancy, and `encode` rejects a record where it disagrees with the evidence:
-
-```nu
-# breaking via the `!` marker
-{type: feat, breaking: true, bang: true, description: 'x'} | ccommit encode   # => 'feat!: x'
-
-# breaking via the footer alone — no `!`
-{type: feat, breaking: true, description: 'x', footers: [{token: 'BREAKING CHANGE', sep: ': ', value: 'y'}]} | ccommit encode
-# => "feat: x\n\nBREAKING CHANGE: y"
-
-# contradictions error rather than guess
-{type: feat, breaking: true, description: 'x'} | ccommit encode                # error: claim with no evidence
-{type: feat, breaking: false, bang: true, description: 'x'} | ccommit encode   # error: evidence with no claim
-```
-
-A configured [type policy](#project-policy-type-list) still applies in this direction: `encode` refuses to mint a header whose type `decode` would reject under the same policy.
 
 ## `ccommit list` ranges
 
@@ -140,56 +109,45 @@ ccommit list HEAD~10            # last 10 commits
 ccommit list v1.4.0 v1.5.0      # commits between two tags
 ```
 
-`from` and `to` are each resolved as a single revision; pass them as two arguments rather than embedding a `..` range in `from`.
+`from` and `to` are each resolved as a single revision
 
 ## `ccommit list` decoration flags
 
-Each flag opts the corresponding column(s) into the output. Default `list` is unchanged - these are pure additions.
+Each flag opts the corresponding column(s) into the output.
 
-| Flag | Adds columns | Source |
-|---|---|---|
-| `--with-email` | `author_email: string` | `git log %ae` |
-| `--with-committer` | `committer, committer_email, committer_date` | `git log %cn / %ce / %cI` |
-| `--with-merge-info` | `parents: list<string>, is_merge: bool` | `git log %P` |
-| `--with-signature` | `signature: string` (`G`/`B`/`U`/`N`/`E`) | `git log %G?` |
-| `--with-tag` | `tag: string \| null` - earliest tag containing the commit | `git tag --contains --sort=creatordate` per row |
-| `--with-stats` | `files_changed: int, insertions: int, deletions: int` | `git show --shortstat` per row |
-| `--with-changes` | `added: list<string>, modified: list<string>, deleted: list<string>` | `git show --name-status` per row, bucketed by status code (renames/copies land in `modified` under their new path) |
+| Flag | Adds columns | Source | Cost |
+|---|---|---|---|
+| `--with-email` | `author_email: string` | `git log %ae` | free |
+| `--with-committer` | `committer, committer_email, committer_date` | `git log %cn / %ce / %cI` | free |
+| `--with-merge-info` | `parents: list<string>, is_merge: bool` | `git log %P` | free |
+| `--with-signature` | `signature: string` (`G`/`B`/`U`/`N`/`E`) | `git log %G?` | free |
+| `--with-stats` | `files_changed: int, insertions: int, deletions: int` | `git show --shortstat` per row | one extra pass |
+| `--with-changes` | `added: list<string>, modified: list<string>, deleted: list<string>` | `git show --name-status` per row, bucketed by status code (renames/copies land in `modified` under their new path) | one extra pass |
+| `--with-tag` | `tag: string \| null` - earliest tag containing the commit | `git tag --contains --sort=creatordate` per row | one operation per commit |
 
+*free* = already fetched by the base `list`. *one extra pass* = a single batched `git log` over the whole range, regardless of size. *one operation per commit* = scales with the number of commits, so reach for it only on the rows you need.
 
-### Performance
+## `ccommit encode` round-trip
 
-The flags fall into three cost tiers:
-
-- **Free** - `--with-email`, `--with-committer`, `--with-merge-info`, `--with-signature`. The base `list` already fetches every one of these fields in its single `git log` call (`%ae`, `%cn`/`%ce`/`%cI`, `%P`, `%G?`). The flag only decides whether the column is kept; toggling it adds **no extra work**. Default `list` simply rejects these columns at the end.
-- **One extra `git log` pass** - `--with-stats` and `--with-changes`. Both derive their data from each commit's diff, so they each run a *single* batched `git log` over the whole range (`--shortstat` / `--name-status`) and join the result onto the rows by hash. Cost is one extra subprocess regardless of how many commits are in the range — it does not scale with N.
-- **One git process per commit** - `--with-tag` (`git tag --contains`). The earliest tag containing a commit can't be derived from a single log pass, so this spawns a subprocess **for every row in the range**, parallelised with `par-each`. This is the only flag whose process count scales linearly with the number of commits.
-
-So a 1000-commit range with no flags - or with only the free ones - is one `git log`; with `--with-stats --with-changes` it's three `git log` passes total; only `--with-tag` adds a process per commit. Reach for `--with-tag` on the rows you actually need (filter the range, or `where`/`first` before deciding).
-
-# Spec conformance
-
-This module adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). The spec reserves the meaning of `feat`, `fix`, and `BREAKING CHANGE` but leaves the type set open - any noun is a valid type (rule 14). **By default this module does the same: any letter-only type is conventional**, so `feat: x`, `wip: x`, and `hotfix: x` all parse as conventional.
-
-On top of that, you can **optionally overlay a closed set of allowed types** to enforce a team policy - set `$env.CONVENTIONAL_COMMIT_VALID_TYPES` and any type outside it is treated as non-conventional.
-
-## Project-policy type list
-
-By default `is-conventional` and `decode` accept any letter-only type, matching the spec. Setting `$env.CONVENTIONAL_COMMIT_VALID_TYPES` turns the type slot into a closed set: both functions build their subject regex from your list, and a commit whose type isn't in it parses as non-conventional. `encode` honours the same policy in the other direction - it errors on an out-of-policy type rather than mint a header `decode` would then reject. This is a policy overlay, opt-in per project - unset means unrestricted.
-
-A common choice is the [Angular convention](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#type). Both a list and a comma/space-separated string are accepted (env vars set from POSIX shells are always strings):
+`encode` and `decode` are inverses: whatever `decode` gives you, `encode` turns back into the original message.
 
 ```nu
-# Nushell config - list form
-$env.CONVENTIONAL_COMMIT_VALID_TYPES = [feat fix docs style refactor perf test build ci chore revert]
+'feat(ui): add picker' | ccommit decode | ccommit encode
+# => 'feat(ui): add picker'
 ```
 
-```sh
-# POSIX shell / CI env - string form
-export CONVENTIONAL_COMMIT_VALID_TYPES="feat,fix,chore,docs,ops"
-```
+This is what makes the structured record safe to edit. Decode a commit, change its `scope` or `description`, encode it back, and you get a valid message.
 
-With `feat,fix,chore,docs,ops` configured, `feat: x` and `ops(infra): y` are conventional; `refactor: z` is not. Matching stays case-insensitive (spec rule 15) - `FEAT: x` still decodes to `type: feat`.
+`Decode` is able to consume unconventional commits, and will parse them into a structure with the `conventional` field set to false.  
+Similarly `encode` is able to produce unconventional commits — but *only* when told to, via `conventional: false`, in which case it emits the raw `subject` verbatim. This way any round-trip is safe to perform and will preserve the original message unchanged.
+
+On the conventional path (`conventional: true`), `encode` guarantees a conventional header: it validates the result against the spec grammar with the same recognizer `decode` uses, so components that can't form a conventional header — a type with non-letters, a scope containing `)`, a multi-line description — error rather than silently produce something `decode` would call non-conventional. The check is against the spec, not the project [type policy](#project-policy-type-list): a spec-valid-but-out-of-policy type like `wip` still encodes, keeping `encode` independent of the environment.
+
+## Encoding
+
+The encoding strategy used depends on the `conventional` field:
+- `true`: `encode` builds the subject line from `type`, `scope`, `breaking`, and `description` alone - so those first two are required, and any `subject` left in the record is simply ignored. If configured, $env.CONVENTIONAL_COMMIT_VALID_TYPES is also validated.
+- `false`: `encode` to emit the raw `subject` verbatim and no validation is performed
 
 # CI/CD recipes
 
@@ -261,7 +219,7 @@ use semver
 
 # Returns the next version string (e.g. `1.5.0`), always strictly greater
 # than `last`. Returns null when no release-worthy commit has landed since
-# `last` — a single sentinel regardless of whether a tag was passed.
+# `last` - a single sentinel regardless of whether a tag was passed.
 def next-version [
 last?: string # e.g. 1.97.45
 ]: nothing -> any {   
@@ -303,7 +261,7 @@ def assert-signed [base: string = 'origin/main'] {
 Group conventional commits between two tags by type and render markdown sections. Two design choices keep the output safe and predictable:
 
 - **Section order is driven by the spec** - not by which type happens to appear first in the data - so the output is stable release-over-release.
-- **User-supplied content (description, scope) goes through an `md-escape` helper** so backticks, brackets, underscores, etc. in a description can't break the rendered markdown. The bullet is assembled via `format pattern` from pre-computed columns rather than inline string building per row.
+- **User-supplied content (description, scope) goes through an `md-escape` helper** so backticks, brackets, underscores, etc. in a description can't break the rendered markdown. The bullet is assembled via `format pattern` from pre-computed columns.
 
 ```nu
 # Escape characters that would otherwise break markdown rendering inside

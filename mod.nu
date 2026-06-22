@@ -80,7 +80,7 @@ def has-breaking-footer [footers: list]: nothing -> bool {
 @example "default — unrestricted (any type valid)" { ccommit valid-types } --result []
 @example "with project override" { with-env {CONVENTIONAL_COMMIT_VALID_TYPES: 'feat fix chore'} { ccommit valid-types } } --result [feat fix chore]
 def valid-types []: nothing -> list<string> {
-  let raw = $env.CONVENTIONAL_COMMIT_VALID_TYPES? | default null
+  let raw = $env.CONVENTIONAL_COMMIT_VALID_TYPES?
   if ($raw | is-empty) {
     []
   } else if (($raw | describe) | str starts-with 'list') {
@@ -91,15 +91,17 @@ def valid-types []: nothing -> list<string> {
   }
 }
 
-# Build the subject-line regex from `valid-types`. When a policy list is
-# configured the types are joined as an alternation (`feat|fix|...`)
-# sorted longest-first so the regex engine can't accept a shorter type
-# as a prefix of a longer one (`fix` vs `fixtures`, etc.). When the list
-# is empty (the default), the type slot matches any letter-only token —
-# the spec only requires the type to be a noun (rule 14), not a member
-# of a fixed set.
-def subject-regex []: nothing -> string {
-  let types = valid-types
+# Build the subject-line regex for a given set of allowed `types`. When the
+# list is non-empty the types are joined as an alternation (`feat|fix|...`)
+# sorted longest-first so the regex engine can't accept a shorter type as a
+# prefix of a longer one (`fix` vs `fixtures`, etc.). When the list is empty
+# the type slot matches any letter-only token — the spec only requires the
+# type to be a noun (rule 14), not a member of a fixed set.
+#
+# Callers pass `(valid-types)` to honour the project policy (`decode`,
+# `is-conventional`), or `[]` for the spec-default grammar regardless of policy
+# (`encode`, which validates its own output without consulting the env).
+def subject-regex [types: list<string>]: nothing -> string {
   let type_pat = if ($types | is-empty) {
     '[a-zA-Z]+'
   } else {
@@ -122,7 +124,7 @@ def subject-regex []: nothing -> string {
 @example "any type valid by default" { 'wip: stuff' | ccommit is-conventional } --result true
 @example "out-of-policy type when configured" { with-env {CONVENTIONAL_COMMIT_VALID_TYPES: 'feat fix'} { 'wip: stuff' | ccommit is-conventional } } --result false
 export def is-conventional []: string -> bool {
-  $in | lines | first | default '' | $in =~ ('(?i)' + (subject-regex))
+  $in | lines | first | default '' | $in =~ ('(?i)' + (subject-regex (valid-types)))
 }
 
 # Decode the piped commit message into its structured parts.
@@ -155,7 +157,7 @@ export def decode []: string -> record {
   let msg = $in
   let s = split-message $msg
   let footers = decode-footers $s.footer_lines
-  let m = $s.subject | parse --regex ('(?i)' + (subject-regex))
+  let m = $s.subject | parse --regex ('(?i)' + (subject-regex (valid-types)))
   if ($m | is-empty) {
     {
       type: null
@@ -212,14 +214,17 @@ def breaking-marker [breaking: bool, bang: bool, footer: bool]: nothing -> strin
 # Inverse of `decode`.
 #
 # The `conventional` field selects the path (defaults to true):
-#   - conventional (true): the subject is built *solely* from the
-#     components (`type`, `scope`, `breaking`, `description`)
-#     The `subject` field is **never** read, so a
-#     `type` and `description` are mandatory: a record missing either errors.
+#   - conventional (true): the subject is built *solely* from the components
+#     (`type`, `scope`, `breaking`, `description`). The `subject` field is
+#     **never** read; `type` and `description` are mandatory. The built header
+#     must be a conventional one — if the components can't form it (a type with
+#     non-letters, a scope holding `)`, a multi-line description), `encode`
+#     errors rather than emit something `decode` would call non-conventional.
 #   - non-conventional (false): the header isn't a `type: description`
 #     shape, so the components can't rebuild it. The raw `subject` line is
 #     emitted verbatim — the only place `subject` is read, and what lets a
-#     non-conventional `decode` round-trip.
+#     non-conventional `decode` round-trip. This is the only way to produce a
+#     non-conventional commit.
 #
 # Fields used (all optional unless noted):
 #   - conventional — selects the path above; defaults to true
@@ -242,10 +247,10 @@ def breaking-marker [breaking: bool, bang: bool, footer: bool]: nothing -> strin
 #                    so the original separator round-trips. Records without a
 #                    `sep` field default to `': '`.
 #
-# Honours the `valid-types` policy: when `$env.CONVENTIONAL_COMMIT_VALID_TYPES`
-# is configured and `type` is set but outside it, `encode` errors rather than
-# emit a string `decode` would reject under the same policy. The check is
-# case-insensitive (spec rule 15), matching `decode`/`is-conventional`.
+# No type-policy gate: unlike `decode`, which reports an out-of-policy type as
+# `conventional: false`, `encode` never consults `valid-types` — it renders the
+# `type` it's given. Encoding stays symmetric with decoding (neither errors on
+# an out-of-policy type).
 @category conventional-commits
 @search-terms format render serialize build conventional
 @example "basic" { {type: feat, description: "add picker"} | ccommit encode } --result "feat: add picker"
@@ -280,20 +285,27 @@ export def encode []: record -> string {
     if ($description | is-empty) {
       error make --unspanned {msg: "encode: `description` is required"}
     }
-    # Enforce the project-policy type list when one is configured, so that
-    # `encode` can't mint a header `decode` would mark non-conventional under
-    # the same policy. Comparison is case-insensitive (spec rule 15).
-    let allowed = valid-types
-    if ($allowed | is-not-empty) and (($type | str downcase) not-in ($allowed | each { str downcase })) {
-      error make --unspanned {msg: $"encode: type '($type)' is not in CONVENTIONAL_COMMIT_VALID_TYPES \(($allowed | str join ', '))"}
-    }
+    # No type-policy gate here, on purpose. `decode` doesn't reject an
+    # out-of-policy type — it just reports `conventional: false` — so `encode`
+    # stays symmetric and renders whatever type it's handed rather than erroring.
     let scope_part = if ($scope | is-empty) { '' } else { '(' + $scope + ')' }
     # `breaking`, `bang`, and any BREAKING CHANGE footer must agree;
     # `breaking-marker` enforces that and yields the `!` (or not). Because
     # `bang` is reproduced exactly, a decoded commit round-trips its header —
     # `feat!: x` keeps its `!` even next to a breaking footer.
     let marker = breaking-marker $breaking $bang (has-breaking-footer $footers)
-    $"($type)($scope_part)($marker): ($description)"
+    let header = $"($type)($scope_part)($marker): ($description)"
+    # The conventional path must yield a conventional header. Validate against
+    # the spec-default grammar (empty type list — policy is not consulted, per
+    # the field note above) using the same recognizer `decode` uses, so the two
+    # can't drift. Components that can't form a conventional header (a type with
+    # non-letters, a scope holding `)`, a multi-line description) are rejected
+    # here rather than silently emitting something `decode` would call
+    # non-conventional. To emit such a line, set `conventional: false`.
+    if not ($header =~ ('(?i)' + (subject-regex []))) {
+      error make --unspanned {msg: $"encode: the components form a non-conventional header \(\"($header)\"); fix `type`/`scope`/`description`, or set `conventional: false` and pass the raw line as `subject`"}
+    }
+    $header
   }
 
   let body_part = if ($body | is-empty) { '' } else { "\n\n" + $body }
