@@ -15,8 +15,9 @@ def "wraps scope in parens" [] {
 }
 
 @test
-def "adds bang for a breaking change" [] {
-    assert equal ({type: feat, scope: api, breaking: true, bang: true, description: "drop /v1"} | encode) "feat(api)!: drop /v1"
+def "adds the ! marker for a breaking change" [] {
+    # `breaking: true` alone synthesizes the `!` — no need to also set `bang`.
+    assert equal ({type: feat, scope: api, breaking: true, description: "drop /v1"} | encode) "feat(api)!: drop /v1"
 }
 
 # ---------- breaking signals: bang emits the `!`, footer alone does not ----------
@@ -38,8 +39,9 @@ def "round-trips a ! marker alongside a BREAKING CHANGE footer" [] {
 # ---------- breaking consistency guard ----------
 
 @test
-def "errors when breaking is true but there is no bang and no footer" [] {
-    assert error { {type: feat, breaking: true, description: "x"} | encode }
+def "synthesizes the ! when breaking is true with no bang and no footer" [] {
+    # The declared intent isn't dropped — encode supplies the `!` itself.
+    assert equal ({type: feat, breaking: true, description: "x"} | encode) "feat!: x"
 }
 
 @test

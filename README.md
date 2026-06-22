@@ -38,8 +38,7 @@ use ccommit
 'feat(ui)!: rework picker' | ccommit decode
 
 # encode a record back into a message (inverse of decode)
-# breaking commits carry the evidence: a `!` (bang) and/or a BREAKING CHANGE footer
-{type: feat, scope: api, breaking: true, bang: true, description: 'drop /v1'} | ccommit encode
+{type: feat, scope: api, breaking: true, description: 'drop /v1'} | ccommit encode
 
 # walk a git range
 ccommit list HEAD~10 HEAD
@@ -55,7 +54,7 @@ On top of that, you can **optionally overlay a closed set of allowed types** to 
 
 ## Project-policy type list
 
-By default `is-conventional` and `decode` accept any letter-only type, matching the spec. Setting `$env.CONVENTIONAL_COMMIT_VALID_TYPES` turns the type slot into a closed set: both functions build their subject regex from your list, and a commit whose type isn't in it decodes as non-conventional. The policy is a decode-side concern only — `encode` never consults it and won't error on an out-of-policy type, keeping the two directions symmetric.
+By default `is-conventional` and `decode` accept any letter-only type, matching the spec. Setting `$env.CONVENTIONAL_COMMIT_VALID_TYPES` turns the type slot into a closed set: a commit whose type isn't in it decodes as non-conventional. The policy is a decode-side concern only — `encode` never consults it and won't error on an out-of-policy type, keeping the two directions symmetric.
 
 In this readme we will use types defined in the [Angular convention](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#type). 
 
@@ -146,8 +145,8 @@ On the conventional path (`conventional: true`), `encode` guarantees a conventio
 ## Encoding
 
 The encoding strategy used depends on the `conventional` field:
-- `true`: `encode` builds the subject line from `type`, `scope`, `breaking`, and `description` alone - so those first two are required, and any `subject` left in the record is simply ignored. If configured, $env.CONVENTIONAL_COMMIT_VALID_TYPES is also validated.
-- `false`: `encode` to emit the raw `subject` verbatim and no validation is performed
+- `true`: `encode` builds the subject line from `type`, `scope`, `breaking`, and `description` alone - so those first two are required, and any `subject` left in the record is simply ignored. `breaking: true` adds the `!` marker unless a BREAKING CHANGE footer already carries the change. The built header is checked against the spec grammar but not the `$env.CONVENTIONAL_COMMIT_VALID_TYPES` policy
+- `false`: `encode` emits the raw `subject` verbatim and no validation is performed
 
 # CI/CD recipes
 
