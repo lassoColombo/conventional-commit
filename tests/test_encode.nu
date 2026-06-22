@@ -19,16 +19,37 @@ def "adds bang for a breaking change" [] {
     assert equal ({type: feat, scope: api, breaking: true, description: "drop /v1"} | encode) "feat(api)!: drop /v1"
 }
 
-# ---------- non-conventional ----------
+# ---------- required components (conventional path) ----------
 
 @test
-def "emits the raw subject when type is missing" [] {
-    assert equal ({subject: "hello world"} | encode) "hello world"
+def "errors when type is missing on the conventional path" [] {
+    # subject is ignored when conventional; without type there's nothing to build.
+    assert error { {subject: "hello world"} | encode }
 }
 
 @test
-def "requires a description when type is set" [] {
+def "errors when description is missing" [] {
     assert error { {type: feat} | encode }
+}
+
+@test
+def "ignores subject entirely on the conventional path" [] {
+    # A stale/contradicting subject must not leak into the output.
+    let r = {type: feat, scope: api, description: "retry on 503", subject: "fix(server): retry on 503"}
+    assert equal ($r | encode) "feat(api): retry on 503"
+}
+
+# ---------- non-conventional path (conventional: false) ----------
+
+@test
+def "emits the raw subject when conventional is false" [] {
+    assert equal ({conventional: false, subject: "hello world"} | encode) "hello world"
+}
+
+@test
+def "round-trips a non-conventional message" [] {
+    let msg = "hello world\n\nsome body"
+    assert equal ($msg | decode | encode) $msg
 }
 
 # ---------- round-trip ----------

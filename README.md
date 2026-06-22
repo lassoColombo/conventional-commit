@@ -73,7 +73,7 @@ ccommit list HEAD~10 HEAD
   type:         string | null   # lowercased type, or null when not conventional
   scope:        string | null   # text inside parens, or null
   breaking:     bool            # true when `!` is in the prefix OR a BREAKING CHANGE footer is present
-  subject:      string          # the raw first line
+  subject:      string          # the raw first line (derived; read-only — see encode note)
   description:  string | null   # text after `: ` (spec rule 5), or null
   body:         string | null   # body paragraphs joined with `\n\n`, or null
   footers:      table<token: string, sep: string, value: string>   # sep is the literal `: ` or ` #` the footer used
@@ -103,7 +103,8 @@ ccommit list HEAD~10 HEAD
 
 Notes on the canonical minimal form:
 
-- When `type` is null/missing, the raw `subject` field is emitted verbatim - so non-conventional decodes still round-trip.
+- The `conventional` field selects the path (defaults to `true`). On the **conventional** path the subject is rebuilt *solely* from the components (`type`, `scope`, `breaking`, `description`) — they are the single source of truth, `subject` is **never** read, and `type`/`description` are required (a record missing either errors). So a stale or contradicting `subject` can't leak in.
+- On the **non-conventional** path (`conventional: false`), the header isn't a `type: description` shape, so the raw `subject` field is emitted verbatim — this is the only place `subject` is read, and what lets a non-conventional `decode` round-trip.
 - When `breaking: true` AND a `BREAKING CHANGE` / `BREAKING-CHANGE` footer is present, the `!` marker is suppressed (the footer alone is sufficient per rules 11, 16). This means `feat!: x\n\nBREAKING CHANGE: y` collapses to `feat: x\n\nBREAKING CHANGE: y` on a decode → encode round-trip.
 - Footers are emitted with the separator `decode` captured in each footer's `sep` field (`: ` or ` #`), so `Closes #42` round-trips intact. A hand-built footer record with no `sep` field defaults to `: `.
 - The [project-policy type list](#project-policy-type-list) is honoured: when `$env.CONVENTIONAL_COMMIT_VALID_TYPES` is set and `type` is outside it, `encode` errors rather than emit a header `decode` would reject under the same policy. The check is case-insensitive (spec rule 15).

@@ -75,7 +75,7 @@ def decode-footers [lines: list<string>] {
 @search-terms types allowed policy valid convention whitelist
 @example "default — unrestricted (any type valid)" { ccommit valid-types } --result []
 @example "with project override" { with-env {CONVENTIONAL_COMMIT_VALID_TYPES: 'feat fix chore'} { ccommit valid-types } } --result [feat fix chore]
-export def valid-types []: nothing -> list<string> {
+def valid-types []: nothing -> list<string> {
   let raw = $env.CONVENTIONAL_COMMIT_VALID_TYPES? | default null
   if ($raw | is-empty) {
     []
@@ -178,17 +178,28 @@ export def decode []: string -> record {
 # Inverse of `decode`. Round-trips canonical inputs:
 #   `'feat(ui)!: x' | decode | encode` returns `'feat(ui)!: x'`.
 #
+# The `conventional` field selects the path (defaults to true):
+#   - conventional (true): the subject is built *solely* from the
+#     components (`type`, `scope`, `breaking`, `description`) — they are the
+#     single source of truth. The `subject` field is **never** read, so a
+#     stale or contradicting value can't leak in. `type` and `description`
+#     are mandatory: a record missing either errors.
+#   - non-conventional (false): the header isn't a `type: description`
+#     shape, so the components can't rebuild it. The raw `subject` line is
+#     emitted verbatim — the only place `subject` is read, and what lets a
+#     non-conventional `decode` round-trip.
+#
 # Fields used (all optional unless noted):
-#   - type         — required for a conventional subject; if null or missing,
-#                    the raw `subject` field is emitted verbatim so that
-#                    non-conventional decoded records round-trip
+#   - conventional — selects the path above; defaults to true
+#   - subject      — emitted verbatim ONLY when `conventional` is false
+#   - type         — required when conventional; the commit type (`feat`, …)
 #   - scope        — wrapped in parens when set
 #   - breaking     — when true AND no BREAKING (CHANGE|-CHANGE) footer is
 #                    present, adds `!` to the prefix. When a BREAKING footer
 #                    is present the `!` is suppressed (canonical minimal form);
 #                    this means `feat!: x\n\nBREAKING CHANGE: y` collapses to
 #                    `feat: x\n\nBREAKING CHANGE: y` on a decode→encode round
-#   - description  — required when `type` is set
+#   - description  — required; the text after `: ` in the subject
 #   - body         — emitted after one blank line; pre-joined with `\n\n`
 #                    between paragraphs (the shape `decode` produces)
 #   - footers      — emitted after one blank line, one per line, using each
@@ -213,13 +224,27 @@ export def encode []: record -> string {
   let description = $r.description? | default null
   let body = $r.body? | default null
   let footers = $r.footers? | default []
+  # `conventional` selects the encoding path. It defaults to true so a
+  # hand-built record is held to the conventional contract (type +
+  # description) unless it explicitly opts out with `conventional: false`.
+  let conventional = $r.conventional? | default true
 
-  let subject = if ($type | is-empty) {
-    # No type → emit the raw subject (round-trips non-conventional decodes).
+  # Non-conventional path: the header isn't a `type: description` shape, so
+  # the components can't reconstruct it. The raw `subject` line is the only
+  # carrier and is emitted verbatim — this is the *only* place `subject` is
+  # read, and the only thing that lets a non-conventional `decode` round-trip.
+  let subject = if (not $conventional) {
     $r.subject? | default ''
   } else {
+    # Conventional path: the subject is built solely from the components —
+    # `subject` is never read, so a stale or contradicting value can't leak
+    # in. `type` and `description` are mandatory; a record missing either is
+    # an error rather than a silently truncated or empty header.
+    if ($type | is-empty) {
+      error make --unspanned {msg: "encode: `type` is required"}
+    }
     if ($description | is-empty) {
-      error make --unspanned {msg: "encode: `description` is required when `type` is set"}
+      error make --unspanned {msg: "encode: `description` is required"}
     }
     # Enforce the project-policy type list when one is configured, so that
     # `encode` can't mint a header `decode` would mark non-conventional under
