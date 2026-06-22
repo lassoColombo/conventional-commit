@@ -46,9 +46,7 @@ def decode-footers [lines: list<string>] {
   $lines | reduce --fold [] {|line, acc|
     let m = $line | parse --regex $FOOTER_REGEX
     if ($m | is-empty) {
-      if ($acc | is-empty) {
-        $acc
-      } else {
+      if ($acc | is-empty) { $acc } else {
         let prev = $acc | last
         let merged = {token: $prev.token, sep: $prev.sep, value: ($prev.value + "\n" + $line)}
         $acc | drop 1 | append $merged
@@ -174,16 +172,13 @@ export def decode []: string -> record {
 }
 
 # Encode a structured commit record back into a Conventional Commits string.
-#
-# Inverse of `decode`. Round-trips canonical inputs:
-#   `'feat(ui)!: x' | decode | encode` returns `'feat(ui)!: x'`.
+# Inverse of `decode`. 
 #
 # The `conventional` field selects the path (defaults to true):
 #   - conventional (true): the subject is built *solely* from the
-#     components (`type`, `scope`, `breaking`, `description`) — they are the
-#     single source of truth. The `subject` field is **never** read, so a
-#     stale or contradicting value can't leak in. `type` and `description`
-#     are mandatory: a record missing either errors.
+#     components (`type`, `scope`, `breaking`, `description`)
+#     The `subject` field is **never** read, so a
+#     `type` and `description` are mandatory: a record missing either errors.
 #   - non-conventional (false): the header isn't a `type: description`
 #     shape, so the components can't rebuild it. The raw `subject` line is
 #     emitted verbatim — the only place `subject` is read, and what lets a
@@ -233,12 +228,10 @@ export def encode []: record -> string {
   # the components can't reconstruct it. The raw `subject` line is the only
   # carrier and is emitted verbatim — this is the *only* place `subject` is
   # read, and the only thing that lets a non-conventional `decode` round-trip.
-  let subject = if (not $conventional) {
-    $r.subject? | default ''
-  } else {
+  let subject = if (not $conventional) { $r.subject? | default '' } else {
     # Conventional path: the subject is built solely from the components —
-    # `subject` is never read, so a stale or contradicting value can't leak
-    # in. `type` and `description` are mandatory; a record missing either is
+    # `subject` is never even read,
+    # `type` and `description` are mandatory; a record missing either is
     # an error rather than a silently truncated or empty header.
     if ($type | is-empty) {
       error make --unspanned {msg: "encode: `type` is required"}
@@ -269,22 +262,13 @@ export def encode []: record -> string {
 
   $subject + $body_part + $footer_part
 }
+
 # List commits in a git range with each message fully decoded.
 #
 # Walks `git log <from>..<to>` reading the full message body (`%B`),
-# with NUL-separated records (`-z`) so multi-line messages survive
-# intact. Each row carries hash/author/date plus the same fields
+# Each row carries hash/author/date plus the same fields
 # returned by `ccommit decode`. Errors if the working directory is
 # not a git repository or if a revision cannot be resolved.
-#
-# Optional decoration flags add extra columns:
-#   --with-email      author_email
-#   --with-committer  committer, committer_email, committer_date
-#   --with-merge-info parents (list<string>), is_merge (bool)
-#   --with-signature  signature ('G'/'B'/'U'/'N'/'E' from `%G?`)
-#   --with-tag        tag — earliest tag containing each commit, or null
-#   --with-stats      files_changed, insertions, deletions (ints)
-#   --with-changes    added, modified, deleted — file paths bucketed by change type
 @category conventional-commits
 @search-terms list log range git conventional
 @example "recent commits" { ccommit list HEAD~10 HEAD }
@@ -296,10 +280,9 @@ export def encode []: record -> string {
 @example "drop merges" { ccommit list --with-merge-info | where not is_merge }
 @example "biggest changes" { ccommit list --with-stats | sort-by insertions --reverse | first 5 }
 @example "commits that touch mod.nu" { ccommit list --with-changes | where {|r| ([...$r.added ...$r.modified ...$r.deleted] | any { $in =~ 'mod.nu' })} }
-@example "deletion commits only" { ccommit list --with-changes | where {|r| ($r.deleted | is-not-empty)} }
 export def list [
   from?: string             # Starting revision (exclusive). Omit to walk full history.
-  to: string = HEAD         # Ending revision (inclusive). Defaults to HEAD.
+  to: string = HEAD         # Ending revision (inclusive).
   --with-email              # Include the author email.
   --with-committer          # Include committer name, email, and date.
   --with-merge-info         # Include parent hashes and an is_merge flag.
@@ -351,7 +334,7 @@ export def list [
   }
 
   # `--with-stats` / `--with-changes` derive their data from the diff of
-  # each commit. Rather than spawn one `git show` per row (O(N) processes),
+  # each commit. Rather than spawn one `git show` per row,
   # each enrichment makes a SINGLE `git log` pass over the same range and
   # builds a hash-keyed lookup. The format prefixes every commit with a
   # record-separator (`%x1e`) so the per-commit blocks can be split apart;
