@@ -1,4 +1,4 @@
-# conventional-commit (ccommit)
+# conventional-commits (ccommit)
 
 [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) module for Nushell.
 
@@ -6,27 +6,28 @@ Parse a message into structured pieces, encode a record back into a message, wal
 
 ---
 
-1. [conventional-commit (ccommit)](#conventional-commit-(ccommit))
-2. [Why?](#why?)
-3. [Installation](#installation)
-   1. [Dependencies](#dependencies)
-4. [Quick start](#quick-start)
-5. [Spec conformance - what is conventional anyway](#spec-conformance---what-is-conventional-anyway)
-   1. [Project-policy type list](#project-policy-type-list)
-6. [Commands](#commands)
-   1. [`ccommit decode`](#`ccommit-decode`)
-   2. [`ccommit encode`](#`ccommit-encode`)
-      1. [Encoding strategies](#encoding-strategies)
-   3. [`ccommit list`](#`ccommit-list`)
-      1. [`ccommit list` decoration flags](#`ccommit-list`-decoration-flags)
-7. [CI/CD recipes](#ci/cd-recipes)
-   1. [Validate every commit in a pull request](#validate-every-commit-in-a-pull-request)
-   2. [Skip CI when no commit is build-worthy](#skip-ci-when-no-commit-is-build-worthy)
-   3. [Build only the components touched by a merge request](#build-only-the-components-touched-by-a-merge-request)
-   4. [Determine the next semver bump](#determine-the-next-semver-bump)
-   5. [Generate a release changelog](#generate-a-release-changelog)
+- [conventional-commits (ccommit)](#conventional-commits-(ccommit))
+  - [Why?](#why?)
+  - [Installation](#installation)
+    - [Dependencies](#dependencies)
+  - [Quick start](#quick-start)
+  - [Spec conformance - what is conventional anyway?](#spec-conformance---what-is-conventional-anyway?)
+    - [Project-policy type list](#project-policy-type-list)
+    - [One definition, both directions](#one-definition,-both-directions)
+  - [Commands](#commands)
+    - [`ccommit decode`](#`ccommit-decode`)
+    - [`ccommit encode`](#`ccommit-encode`)
+    - [`ccommit is-conventional`](#`ccommit-is-conventional`)
+    - [`ccommit list`](#`ccommit-list`)
+  - [CI/CD recipes](#ci/cd-recipes)
+    - [Validate every commit in a pull request](#validate-every-commit-in-a-pull-request)
+    - [Skip CI when no commit is build-worthy](#skip-ci-when-no-commit-is-build-worthy)
+    - [Build only the components touched by a merge request](#build-only-the-components-touched-by-a-merge-request)
+    - [Determine the next semver bump](#determine-the-next-semver-bump)
+    - [Generate a release changelog](#generate-a-release-changelog)
+  - [Mentions](#mentions)
 
-# Why?
+## Why?
 
 Because answering questions like these is more difficult than it should be:
 - `which breaking change shipped between v1.4.0 and v1.5.0?` 
@@ -43,23 +44,23 @@ ccommit list --with-changes v1.4.0 v1.5.0
 
 Most of those questions get asked *inside a CI/CD pipeline*, and nushell is the right tool to answer: it has the ease of use of a shell, but also the precision of any general-purpose programming language. See the [CI/CD recipes](#cicd-recipes) for ready-to-adapt examples of use.
 
-# Installation
+## Installation
 
 ```nu
 # clone into one of your NU_LIB_DIRS
 let dest = [($env.NU_LIB_DIRS | first) ccommit] | path join # I like to call it ccommit
-git clone git@github.com:lassoColombo/conventional-commit.git $dest
+git clone git@github.com:lassoColombo/conventional-commits.git $dest
 
 # use the module
 use ccommit
 ccommit list --help
 ```
 
-## Dependencies
+### Dependencies
 
 - `git` is used in the commands that inspect the state of the repository (`ccommit list`)
 
-# Quick start
+## Quick start
 
 ```nu
 use ccommit
@@ -77,112 +78,258 @@ use ccommit
 ccommit list HEAD~10 HEAD
 ```
 
-# Spec conformance - what is conventional anyway?
+## Spec conformance - what is conventional anyway?
 
-This module adheres to [Conventional Commits v.1.0.0](https://www.conventionalcommits.org/en/v1.0.0/).  
+This module adheres to [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/).  
 
-The spec reserves the meaning of `feat`, `fix`, and `BREAKING CHANGE` but leaves the type set open - any noun is a valid type. **By default this module does the same: any letter-only type is conventional**, so `feat: x`, `wip: x`, and `asd: x` all parse as conventional.
+The spec reserves the meaning of `feat`, `fix`, and `BREAKING CHANGE` but leaves the type set open - any noun is a valid type.  
 
-On top of that, you can **optionally overlay a closed set of allowed types** to enforce a team policy - set `$env.CONVENTIONAL_COMMIT_VALID_TYPES` and any type outside it is treated as non-conventional.
+**By default this module does the same: any letter-only type is conventional**, so `feat: x`, `wip: x`, and `asd: x` all parse as conventional.  
 
-## Project-policy type list
+You can optionally overlay a closed set to enforce a team policy (see [Project-policy type list](#project-policy-type-list)).
 
-By default `is-conventional` and `decode` accept any letter-only type, matching the spec. Setting `$env.CONVENTIONAL_COMMIT_VALID_TYPES` turns the type slot into a closed set.  
-That one definition governs **both** directions: `decode` parses a commit whose type isn't in the set as non-conventional, and `encode` refuses to build a `conventional: true` header with such a type.
+### Project-policy type list
 
-`$env.CONVENTIONAL_COMMIT_VALID_TYPES` can both be a list and a comma/space-separated string:
+By default `is-conventional` and `decode` accept any letter-only type, matching the spec. Setting `$env.CONVENTIONAL_COMMIT_VALID_TYPES` turns the type slot into a closed set, and that one definition governs **both** directions: `decode` parses a commit whose type isn't in the set as non-conventional, and `encode` refuses to build a `conventional: true` header with such a type (use `conventional: false` to emit it as a raw subject).
+
+`$env.CONVENTIONAL_COMMIT_VALID_TYPES` can be a list or a comma/space-separated string:
 ```nu
 # Nushell config - list form
 $env.CONVENTIONAL_COMMIT_VALID_TYPES = [feat fix docs style refactor perf test build ci chore revert]
 ```
 ```sh
-# POSIX shell / CI env - string form
+# POSIX shell / CI-friendly - string form
 export CONVENTIONAL_COMMIT_VALID_TYPES="feat,fix,chore,docs,ops"
 ```
 
-# Commands
+### One definition, both directions
 
-| Command | Signature | Description |
-|---------|-----------|-------------|
-| `ccommit is-conventional` | `string -> bool` | Header-only validity check. Body and footers are ignored. |
-| `ccommit decode` | `string -> record` | Full structured parse. Returns the same shape for conventional and non-conventional input. |
-| `ccommit encode` | `record -> string` | Inverse of `decode`. Renders a structured record back into a Conventional Commits string. |
-| `ccommit list` | `[from?: string, to: string = HEAD] -> table` | Walk `git log <from>..<to>` and parse each commit. Omit `from` to walk full history. Optional flags add decoration columns (author email, committer, merge info, GPG status, containing tag, diff stats, per-file change buckets). |
-
-
-## `ccommit decode`
-
-`ccommit decode` always returns this record. Fields are nullable so non-conventional input is still safe to consume:
+The `decode` and `encode` commands are exact inverses: whatever `decode` produces, `encode` turns back into the original message - and that holds for non-conventional commits too, so every round-trip is lossless.
 
 ```nu
-{
-  type:         string | null   # lowercased type, or null when not conventional
-  scope:        string | null   # text inside parens, or null
-  breaking:     bool            # true when `!` is in the prefix OR a BREAKING CHANGE footer is present
-  bang:         bool            # true when the `!` marker was literally in the header (≠ breaking, which also counts the footer)
-  subject:      string          # the raw first line (derived; read-only - see encode note)
-  description:  string | null   # text after `: ` (spec rule 5), or null
-  body:         string | null   # body paragraphs joined with `\n\n`, or null
-  footers:      table<token: string, sep: string, value: string>   # sep is the literal `: ` or ` #` the footer used
-  conventional: bool            # true when the subject line conforms
-}
+'feat(ui): add picker' | ccommit decode | ccommit encode  # => 'feat(ui): add picker'
 ```
 
-## `ccommit encode`
+- `decode` parses anything; unconventional input comes back with `conventional: false`.
+- `encode` chooses its path from that `conventional` field. 
+    - **non-conventional**: emits the raw `subject`, without validation.
+    - **conventional** (default): builds the subject from `type`, `scope`, `breaking`, and `description`, then validates it with the *same* recognizer `decode` uses - the active type policy included - so components that can't form a conventional header are rejected rather than emitted. 
 
-`encode` and `decode` are inverses: whatever `decode` gives you, `encode` turns back into the original message.
+`conventional: false` the only way to produce a non-conventional commit, and what lets a non-conventional `decode` round-trip unchanged:
 
 ```nu
+# decoding a conventional commit
+'fix(collector): retry on error' | ccommit decode
+# ╭──────────────┬────────────────────────────────╮
+# │ type         │ fix                            │
+# │ scope        │ collector                      │
+# │ breaking     │ false                          │
+# │ bang         │ false                          │
+# │ subject      │ fix(collector): retry on error │
+# │ description  │ retry on error                 │
+# │ body         │                                │
+# │ footers      │ [list 0 items]                 │
+# │ conventional │ true                           │
+# ╰──────────────┴────────────────────────────────╯
+
+# decoding an unconventional commit
+'retry on error' | ccommit decode
+# ╭──────────────┬────────────────╮
+# │ type         │                │
+# │ scope        │                │
+# │ breaking     │ false          │
+# │ bang         │ false          │
+# │ subject      │ retry on error │
+# │ description  │                │
+# │ body         │                │
+# │ footers      │ [list 0 items] │
+# │ conventional │ false          │
+# ╰──────────────┴────────────────╯
+
+# encoding a conventional commit
+{type: fix, scope: collector, description: "retry on error"} | ccommit encode
+# => fix(collector): retry on error
+
+# encoding a non conventional commit
+{subject: "retry on error", conventional: false} | ccommit encode
+# => retry on error
+```
+
+## Commands
+
+| Command                                               | Signature          | Description                                                                |
+| ----------------------------------------------------- | ------------------ | -------------------------------------------------------------------------- |
+| [`ccommit decode`](#ccommit-decode)                   | `string -> record` | Decode the piped commit message into its structured parts.                 |
+| [`ccommit encode`](#ccommit-encode)                   | `record -> string` | Encode a structured commit record back into a Conventional Commits string. |
+| [`ccommit is-conventional`](#ccommit-is-conventional) | `string -> bool`   | Check whether the piped message has a conformant subject line.             |
+| [`ccommit list`](#ccommit-list)                       | `nothing -> table` | List commits in a git range with each message fully decoded.               |
+
+### `ccommit decode`
+
+Decode the piped commit message into its structured parts.
+
+Always returns a record with the same shape, so non-conventional input is still safe to consume:  
+- `type`: lowercased type, or null when not conventional  
+- `scope`: text inside parens, or null  
+- `breaking`: true when `!` is in the prefix OR a BREAKING CHANGE/BREAKING-CHANGE footer is present  
+- `bang`: true when the `!` marker was literally in the header. Distinct from `breaking`, which also counts the footer.  
+- `subject`: the raw first line of the message  
+- `description`: text after `: ` (spec rule 5), or null otherwise  
+- `body`: body paragraphs joined with `\n\n`, or null  
+- `footers`: `table<token: string, sep: string, value: string>`;  
+`sep` is the literal `': '` or `' #'` the footer used  
+- `conventional`: true when the subject line conforms
+
+**Signature:** `string -> record` · **Category:** `conventional-commits`
+
+**Search terms:** `parse`, `split`, `decompose`, `conventional`
+
+**Examples**
+
+```nu
+# subject only
+'feat(ui): add picker' | ccommit decode
+
+# breaking via footer
+"feat: rework auth\n\nBREAKING CHANGE: drop /v1" | ccommit decode
+
+# body and footers
+"fix(api): retry on 503\n\nThe upstream returns 503 during deploys.\n\nRefs #42\nReviewed-by: alice" | ccommit decode
+
+# non-conventional
+'hello world' | ccommit decode
+```
+
+### `ccommit encode`
+
+Encode a structured commit record back into a Conventional Commits string.  
+Inverse of `decode`.
+
+The `conventional` field selects the path (defaults to true):  
+- `conventional: true`: the subject is built *solely* from the components (`type`, `scope`, `breaking`, `description`). The `subject` field is **never** read. The built header must be conventional by the same definition `decode` uses, the active type policy included. `encode` errors rather than emit something `decode` would call non-conventional.  
+- `conventional: false`: the header isn't a `type: description` shape, so the components can't rebuild it. The raw `subject` line is emitted verbatim.
+
+**Signature:** `record -> string` · **Category:** `conventional-commits`
+
+**Search terms:** `format`, `render`, `serialize`, `build`, `conventional`
+
+**Examples**
+
+```nu
+# basic
+{type: feat, description: "add picker"} | ccommit encode
+# => "feat: add picker"
+
+# with scope and breaking
+{type: feat, scope: api, breaking: true, description: "drop /v1"} | ccommit encode
+# => "feat(api)!: drop /v1"
+
+# round-trip
 'feat(ui): add picker' | ccommit decode | ccommit encode
-# => 'feat(ui): add picker'
+# => "feat(ui): add picker"
 ```
 
-- `Decode` is able to consume unconventional commits, and will parse them into a structure with the `conventional` field set to false.  
-- Similarly `encode` is able to produce unconventional commits - but *only* when told to, via `conventional: false`.  
-This way any round-trip is safe to perform and will preserve the original message unchanged, even for unconventional commits.
+### `ccommit is-conventional`
 
-### Encoding strategies
+Check whether the piped message has a conformant subject line.
 
-The encoding strategy depends on the `conventional` field:
+Only the first line is inspected — body and footers are ignored.  
+By default any letter-only type is accepted; when  
+`valid-types` is configured, the type must appear in it. Matching is  
+case-insensitive.
 
-- **`true`** - the subject is built from `type`, `scope` (optional), `breaking` (optional), and `description` alone. `breaking: true` adds the `!` marker unless a BREAKING CHANGE footer already carries the change. The built header is then validated with the *same* recognizer `decode` uses.
-- **`false`** - `encode` emits the raw `subject`, no validation. This is the only way to produce a non-conventional commit, and what lets a non-conventional `decode` round-trip.
+**Signature:** `string -> bool` · **Category:** `conventional-commits`
 
+**Search terms:** `validate`, `check`, `conventional`
 
-## `ccommit list`
-
-`ccommit list` augments each row with `hash`, `author`, and `date` from `git log`.  
-You can use decoration flags add more columns on demand (see below).
-
-`from` is exclusive, `to` defaults to `HEAD` - matching `git log` semantics:
+**Examples**
 
 ```nu
-ccommit list                    # full history
-ccommit list HEAD~10            # last 10 commits
-ccommit list v1.4.0 v1.5.0      # commits between two tags
+# valid feat
+'feat(ui): add picker' | ccommit is-conventional
+# => true
+
+# case-insensitive
+'FIX: typo' | ccommit is-conventional
+# => true
+
+# any type valid by default
+'wip: stuff' | ccommit is-conventional
+# => true
+
+# out-of-policy type when configured
+with-env {CONVENTIONAL_COMMIT_VALID_TYPES: 'feat fix'} { 'wip: stuff' | ccommit is-conventional }
+# => false
 ```
 
-### `ccommit list` decoration flags
+### `ccommit list`
 
-Each flag opts the corresponding column(s) into the output.
+List commits in a git range with each message fully decoded.
 
-| Flag | Adds columns | Source | Cost |
-|---|---|---|---|
-| `--with-email` | `author_email: string` | `git log %ae` | free |
-| `--with-committer` | `committer, committer_email, committer_date` | `git log %cn / %ce / %cI` | free |
-| `--with-merge-info` | `parents: list<string>, is_merge: bool` | `git log %P` | free |
-| `--with-signature` | `signature: string` (`G`/`B`/`U`/`N`/`E`) | `git log %G?` | free |
-| `--with-stats` | `files_changed: int, insertions: int, deletions: int` | `git show --shortstat` per row | one extra operation |
-| `--with-changes` | `added: list<string>, modified: list<string>, deleted: list<string>` | `git show --name-status` per row, bucketed by status code (renames/copies land in `modified` under their new path) | one extra operation |
-| `--with-tag` | `tag: string \| null` - earliest tag containing the commit | `git tag --contains --sort=creatordate` per row | one operation per commit |
+Walks `git log <from>..<to>` reading the full message body (`%B`),  
+Each row carries hash/author/date plus the same fields  
+returned by `ccommit decode`. Errors if the working directory is  
+not a git repository or if a revision cannot be resolved.
 
-*free* = already fetched by the base `list`. *one extra operation* = a single batched `git log` over the whole range, regardless of size. *one operation per commit* = scales with the number of commits.
+**Signature:** `nothing -> table` · **Category:** `conventional-commits`
 
-# CI/CD recipes
+**Parameters**
 
-These are copy-paste starting points, not built-ins. Each is a small function that takes the commit range as explicit `from` / `to` arguments, because *how* you obtain the base and head refs is specific to your tools.
+| Parameter | Type     | Default  | Description                                               |
+| --------- | -------- | -------- | --------------------------------------------------------- |
+| `from?`   | `string` |          | Starting revision (exclusive). Omit to walk full history. |
+| `to?`     | `string` | `"HEAD"` | Ending revision (inclusive).                              |
 
-## Validate every commit in a pull request
+**Flags**
+
+| Flag                | Type     | Description                                                |
+| ------------------- | -------- | ---------------------------------------------------------- |
+| `--with-email`      | `switch` | Include the author email.                                  |
+| `--with-committer`  | `switch` | Include committer name, email, and date.                   |
+| `--with-merge-info` | `switch` | Include parent hashes and an is_merge flag.                |
+| `--with-signature`  | `switch` | Include GPG signature status (`%G?`).                      |
+| `--with-tag`        | `switch` | Include the earliest tag containing each commit.           |
+| `--with-stats`      | `switch` | Include files_changed / insertions / deletions per commit. |
+| `--with-changes`    | `switch` | Include `added` / `modified` / `deleted` file-path lists.  |
+
+**Search terms:** `list`, `log`, `range`, `git`, `conventional`
+
+**Examples**
+
+```nu
+# recent commits
+ccommit list HEAD~10 HEAD
+
+# between tags
+ccommit list v1.4.0 v1.5.0
+
+# full history
+ccommit list
+
+# breaking only
+ccommit list | where breaking
+
+# non-conformant
+ccommit list | where not conventional
+
+# which release shipped each
+ccommit list HEAD~10 --with-tag
+
+# drop merges
+ccommit list --with-merge-info | where not is_merge
+
+# biggest changes
+ccommit list --with-stats | sort-by insertions --reverse | first 5
+
+# commits that touch mod.nu
+ccommit list --with-changes | where {|r| ([...$r.added ...$r.modified ...$r.deleted] | any { $in =~ 'mod.nu' })}
+```
+
+## CI/CD recipes
+
+These are ready-made functions or ready-to-adapt starting points. Each is a small function that takes the commit range as explicit `from` / `to` arguments.
+
+### Validate every commit in a pull request
 
 Fail the pipeline if any commit in the range isn't conventional. The offenders' hashes and subjects are printed before exit so the author can fix them up:
 
@@ -194,32 +341,23 @@ def assert-conventional [from: string, to: string = HEAD] {
     $offenders | select hash author subject | each {$in | table -e} | str join "\n\n" | print
     error make --unspanned {msg: $"($offenders | length) commit\(s) need a conventional header"}
 }
-
-# e.g. GitHub Actions:  assert-conventional origin/main HEAD
 ```
 
-## Skip CI when no commit is build-worthy
+### Skip CI when no commit is build-worthy
 
 Short-circuit the pipeline when the range only carries `docs` / `chore` / `style` noise. `build-worthy` returns the commits whose type is worth building; an empty result means skip.
 
 ```nu
-def build-worthy [
-    from: string
-    to: string = HEAD
-    types: list<string> = [feat fix perf refactor]
-]: nothing -> table {
-    ccommit list $from $to | where {|c| $c.conventional and ($c.type in $types)}
-}
-
-if (build-worthy origin/main HEAD | is-empty) {
-    print $'(ansi green)no build-worthy commits - skipping pipeline(ansi reset)'
+let worthy = ccommit list origin/main | where {|c| $c.conventional and ($c.type in $types)}
+if ($worthy | is-empty) {
+    print $'no build-worthy commits - skipping pipeline'
     return
 }
 ```
 
-## Build only the components touched by a merge request
+### Build only the components touched by a merge request
 
-In a monorepo where each top-level directory is an independent component, build only the components that were touched in the current merge request - and that still exists on disk:
+In an imaginary monorepo where each top-level directory is an independent component, build only the components that were touched in the current merge request - and that still exists on disk:
 
 ```nu
 # Top-level dirs that aren't meta/hidden (`_cicfg`, `.github`, …).
@@ -243,9 +381,9 @@ touched-components origin/main HEAD | par-each {|c|
 }
 ```
 
-## Determine the next semver bump
+### Determine the next semver bump
 
-You can use this module in combination with [`semver`](https://github.com/lassoColombo/semver) to determine the next tag based on the commits since the last one:
+Pair `ccommit` with [`semver`](https://github.com/lassoColombo/semantic-versioning) to compute the next tag from the commits since the last release: in this example a breaking change bumps major, a `feat` bumps minor, a `fix`/`perf`/`refactor` bumps patch.
 
 ```nu
 use ccommit
@@ -276,9 +414,7 @@ def next-version [
 }
 ```
 
-## Generate a release changelog
-
-Group conventional commits by type into markdown sections. Two small choices keep it predictable: section order follows a fixed list (stable release-over-release, not data-dependent), and every commit description is run through `md-escape` so nothing in it can break the rendering.
+### Generate a release changelog
 
 ```nu
 def md-escape []: string -> string {
@@ -299,3 +435,7 @@ def changelog [from: string, to: string = HEAD]: nothing -> string {
     } | compact | str join "\n\n"
 }
 ```
+
+## Mentions
+
+Tests are powered by [nutest](https://github.com/vyadh/nutest) an amazing testing framework for nushell

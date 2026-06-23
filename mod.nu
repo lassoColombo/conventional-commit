@@ -113,10 +113,9 @@ def subject-regex [types: list<string>]: nothing -> string {
 # Check whether the piped message has a conformant subject line.
 #
 # Only the first line is inspected — body and footers are ignored.
-# By default any letter-only type is accepted (matching the spec); when
+# By default any letter-only type is accepted; when
 # `valid-types` is configured, the type must appear in it. Matching is
-# case-insensitive (spec rule 15). A message with a `BREAKING CHANGE`
-# footer but a non-conformant header still returns false.
+# case-insensitive.
 @category conventional-commits
 @search-terms validate check conventional
 @example "valid feat" { 'feat(ui): add picker' | ccommit is-conventional } --result true
@@ -129,24 +128,17 @@ export def is-conventional []: string -> bool {
 
 # Decode the piped commit message into its structured parts.
 #
-# Always returns a record with the same shape, so non-conventional
-# input is still safe to consume:
-#   - type         — lowercased type, or null when not conventional
-#   - scope        — text inside parens, or null
-#   - breaking     — true when `!` is in the prefix OR a BREAKING CHANGE
-#                    / BREAKING-CHANGE footer is present (rules 11, 16)
-#   - bang         — true when the `!` marker was literally in the header.
-#                    Distinct from `breaking`, which also counts the footer:
-#                    a commit breaking *only* via footer has `breaking: true`
-#                    but `bang: false`. Keeping the two apart lets `encode`
-#                    reproduce the header exactly (a `feat!: x` with a
-#                    BREAKING CHANGE footer round-trips with its `!` intact)
-#   - subject      — the raw first line of the message
-#   - description  — text after `: ` (spec rule 5), or null otherwise
-#   - body         — body paragraphs joined with `\n\n`, or null
-#   - footers      — table<token: string, sep: string, value: string>; `sep`
-#                    is the literal `': '` or `' #'` the footer used
-#   - conventional — true when the subject line conforms
+# Always returns a record with the same shape, so non-conventional input is still safe to consume:
+# - `type`: lowercased type, or null when not conventional
+# - `scope`: text inside parens, or null
+# - `breaking`: true when `!` is in the prefix OR a BREAKING CHANGE/BREAKING-CHANGE footer is present
+# - `bang`: true when the `!` marker was literally in the header. Distinct from `breaking`, which also counts the footer.
+# - `subject`: the raw first line of the message
+# - `description`: text after `: ` (spec rule 5), or null otherwise
+# - `body`: body paragraphs joined with `\n\n`, or null
+# - `footers`: `table<token: string, sep: string, value: string>`;
+#   `sep` is the literal `': '` or `' #'` the footer used
+# - `conventional`: true when the subject line conforms
 @category conventional-commits
 @search-terms parse split decompose conventional
 @example "subject only" { 'feat(ui): add picker' | ccommit decode }
@@ -210,51 +202,8 @@ def breaking-marker [breaking: bool, bang: bool, footer: bool]: nothing -> strin
 # Inverse of `decode`.
 #
 # The `conventional` field selects the path (defaults to true):
-#   - conventional (true): the subject is built *solely* from the components
-#     (`type`, `scope`, `breaking`, `description`). The `subject` field is
-#     **never** read; `type` and `description` are mandatory. The built header
-#     must be conventional by the same definition `decode` uses, the active
-#     type policy included — if the components can't form one (a type with
-#     non-letters or outside the policy, a scope holding `)`, a multi-line
-#     description), `encode` errors rather than emit something `decode` would
-#     call non-conventional.
-#   - non-conventional (false): the header isn't a `type: description`
-#     shape, so the components can't rebuild it. The raw `subject` line is
-#     emitted verbatim — the only place `subject` is read, and what lets a
-#     non-conventional `decode` round-trip. This is the only way to produce a
-#     non-conventional commit.
-#
-# Fields used (all optional unless noted):
-#   - conventional — selects the path above; defaults to true
-#   - subject      — emitted verbatim ONLY when `conventional` is false
-#   - type         — required when conventional; the commit type (`feat`, …)
-#   - scope        — wrapped in parens when set
-#   - breaking     — the declared breaking-change intent (defaults to false).
-#                    When true, the header gets a `!` unless a BREAKING
-#                    (CHANGE|-CHANGE) footer already carries the change (then
-#                    the footer alone suffices — minimal form). Declaring
-#                    `breaking: false` while a `bang` or such a footer is
-#                    present is a contradiction and errors (rules 11, 16)
-#   - bang         — the literal `!` from the header (defaults to false).
-#                    It only changes the output when a BREAKING CHANGE footer
-#                    is *also* present: then `bang: true` keeps the `!` and
-#                    `bang: false` drops it (minimal form). `decode` captures
-#                    it, so `feat!: x` written alongside such a footer
-#                    round-trips with its `!` intact. Hand-built records can
-#                    usually just set `breaking` and leave `bang` alone
-#   - description  — required; the text after `: ` in the subject
-#   - body         — emitted after one blank line; pre-joined with `\n\n`
-#                    between paragraphs (the shape `decode` produces)
-#   - footers      — emitted after one blank line, one per line, using each
-#                    footer's `sep` (the `': '` or `' #'` captured by `decode`)
-#                    so the original separator round-trips. Records without a
-#                    `sep` field default to `': '`.
-#
-# One definition of "conventional", both directions: when a type policy is
-# configured (`valid-types`), `encode` enforces it on the conventional path
-# exactly as `decode` recognizes it — an out-of-policy type errors. So the two
-# agree on what "conventional" means, and `conventional: false` is the escape
-# hatch for anything outside it (it emits the raw `subject` verbatim).
+# - `conventional: true`: the subject is built *solely* from the components (`type`, `scope`, `breaking`, `description`). The `subject` field is **never** read. The built header must be conventional by the same definition `decode` uses, the active type policy included. `encode` errors rather than emit something `decode` would call non-conventional.
+# - `conventional: false`: the header isn't a `type: description` shape, so the components can't rebuild it. The raw `subject` line is emitted verbatim.
 @category conventional-commits
 @search-terms format render serialize build conventional
 @example "basic" { {type: feat, description: "add picker"} | ccommit encode } --result "feat: add picker"
@@ -269,20 +218,8 @@ export def encode []: record -> string {
   let description = $r.description? | default null
   let body = $r.body? | default null
   let footers = $r.footers? | default []
-  # `conventional` selects the encoding path. It defaults to true so a
-  # hand-built record is held to the conventional contract (type +
-  # description) unless it explicitly opts out with `conventional: false`.
   let conventional = $r.conventional? | default true
-
-  # Non-conventional path: the header isn't a `type: description` shape, so
-  # the components can't reconstruct it. The raw `subject` line is the only
-  # carrier and is emitted verbatim — this is the *only* place `subject` is
-  # read, and the only thing that lets a non-conventional `decode` round-trip.
   let subject = if (not $conventional) { $r.subject? | default '' } else {
-    # Conventional path: the subject is built solely from the components —
-    # `subject` is never even read,
-    # `type` and `description` are mandatory; a record missing either is
-    # an error rather than a silently truncated or empty header.
     if ($type | is-empty) {
       error make --unspanned {msg: "encode: `type` is required"}
     }
@@ -290,19 +227,8 @@ export def encode []: record -> string {
       error make --unspanned {msg: "encode: `description` is required"}
     }
     let scope_part = if ($scope | is-empty) { '' } else { '(' + $scope + ')' }
-    # `breaking`, `bang`, and any BREAKING CHANGE footer must agree;
-    # `breaking-marker` enforces that and yields the `!` (or not). Because
-    # `bang` is reproduced exactly, a decoded commit round-trips its header —
-    # `feat!: x` keeps its `!` even next to a breaking footer.
     let marker = breaking-marker $breaking $bang (has-breaking-footer $footers)
     let header = $"($type)($scope_part)($marker): ($description)"
-    # The conventional path must yield a conventional header — by the *same*
-    # definition `decode` uses, the active type policy included. Reusing
-    # `decode`'s recognizer (`subject-regex (valid-types)`) keeps the two from
-    # drifting: a header the components can't form conventionally (a type with
-    # non-letters or outside the policy, a scope holding `)`, a multi-line
-    # description) is rejected here rather than emitting something `decode`
-    # would call non-conventional. To emit such a line, set `conventional: false`.
     if not ($header =~ ('(?i)' + (subject-regex (valid-types)))) {
       error make --unspanned {msg: $"encode: the components form a non-conventional header \(\"($header)\"); fix `type`/`scope`/`description`, or set `conventional: false` and pass the raw line as `subject`"}
     }
