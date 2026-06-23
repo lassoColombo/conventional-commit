@@ -4,7 +4,8 @@
 
 Parse a message into structured pieces, encode a record back into a message, walk git ranges.
 
-### Table of contents
+---
+
 1. [conventional-commit (ccommit)](#conventional-commit-(ccommit))
 2. [Why?](#why?)
 3. [Installation](#installation)
@@ -28,7 +29,7 @@ Parse a message into structured pieces, encode a record back into a message, wal
 # Why?
 
 Because answering questions like these is more difficult than it should be:
-- `which breaking changes shipped between v1.4.0 and v1.5.0?` 
+- `which breaking change shipped between v1.4.0 and v1.5.0?` 
 - `is there any commit woth of building in this merge request?` 
 - `what components in this monorepo were reverted yesterday?` 
 
@@ -76,7 +77,7 @@ use ccommit
 ccommit list HEAD~10 HEAD
 ```
 
-# Spec conformance - what is conventional anyway
+# Spec conformance - what is conventional anyway?
 
 This module adheres to [Conventional Commits v.1.0.0](https://www.conventionalcommits.org/en/v1.0.0/).  
 
@@ -86,7 +87,8 @@ On top of that, you can **optionally overlay a closed set of allowed types** to 
 
 ## Project-policy type list
 
-By default `is-conventional` and `decode` accept any letter-only type, matching the spec. Setting `$env.CONVENTIONAL_COMMIT_VALID_TYPES` turns the type slot into a closed set, and that one definition governs **both** directions: `decode` parses a commit whose type isn't in the set as non-conventional, and `encode` refuses to build a `conventional: true` header with such a type (set `conventional: false` to emit it as a raw subject instead).
+By default `is-conventional` and `decode` accept any letter-only type, matching the spec. Setting `$env.CONVENTIONAL_COMMIT_VALID_TYPES` turns the type slot into a closed set.  
+That one definition governs **both** directions: `decode` parses a commit whose type isn't in the set as non-conventional, and `encode` refuses to build a `conventional: true` header with such a type.
 
 `$env.CONVENTIONAL_COMMIT_VALID_TYPES` can both be a list and a comma/space-separated string:
 ```nu
@@ -97,8 +99,6 @@ $env.CONVENTIONAL_COMMIT_VALID_TYPES = [feat fix docs style refactor perf test b
 # POSIX shell / CI env - string form
 export CONVENTIONAL_COMMIT_VALID_TYPES="feat,fix,chore,docs,ops"
 ```
-
-In this readme we will use types defined in the [Angular convention](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#type). 
 
 # Commands
 
@@ -137,18 +137,16 @@ In this readme we will use types defined in the [Angular convention](https://git
 # => 'feat(ui): add picker'
 ```
 
-This is what makes the structured record safe to edit. Decode a commit, change its `scope` or `description`, encode it back, and you get a valid message.
-
-`Decode` is able to consume unconventional commits, and will parse them into a structure with the `conventional` field set to false.  
-Similarly `encode` is able to produce unconventional commits - but *only* when told to, via `conventional: false`.  
-This way any round-trip is safe to perform and will preserve the original message unchanged.
+- `Decode` is able to consume unconventional commits, and will parse them into a structure with the `conventional` field set to false.  
+- Similarly `encode` is able to produce unconventional commits - but *only* when told to, via `conventional: false`.  
+This way any round-trip is safe to perform and will preserve the original message unchanged, even for unconventional commits.
 
 ### Encoding strategies
 
 The encoding strategy depends on the `conventional` field:
 
-- **`true`** - the subject is built from `type`, `scope`, `breaking`, and `description` alone; `type` and `description` are required, and any `subject` left in the record is ignored. `breaking: true` adds the `!` marker unless a BREAKING CHANGE footer already carries the change. The built header is then validated with the *same* recognizer `decode` uses - the [type policy](#project-policy-type-list) included - so `encode` can never mint a `conventional: true` header that `decode` would read back as non-conventional.
-- **`false`** - `encode` emits the raw `subject` verbatim, no validation. This is the only way to produce a non-conventional commit, and what lets a non-conventional `decode` round-trip.
+- **`true`** - the subject is built from `type`, `scope` (optional), `breaking` (optional), and `description` alone. `breaking: true` adds the `!` marker unless a BREAKING CHANGE footer already carries the change. The built header is then validated with the *same* recognizer `decode` uses.
+- **`false`** - `encode` emits the raw `subject`, no validation. This is the only way to produce a non-conventional commit, and what lets a non-conventional `decode` round-trip.
 
 
 ## `ccommit list`
@@ -174,11 +172,11 @@ Each flag opts the corresponding column(s) into the output.
 | `--with-committer` | `committer, committer_email, committer_date` | `git log %cn / %ce / %cI` | free |
 | `--with-merge-info` | `parents: list<string>, is_merge: bool` | `git log %P` | free |
 | `--with-signature` | `signature: string` (`G`/`B`/`U`/`N`/`E`) | `git log %G?` | free |
-| `--with-stats` | `files_changed: int, insertions: int, deletions: int` | `git show --shortstat` per row | one extra pass |
-| `--with-changes` | `added: list<string>, modified: list<string>, deleted: list<string>` | `git show --name-status` per row, bucketed by status code (renames/copies land in `modified` under their new path) | one extra pass |
+| `--with-stats` | `files_changed: int, insertions: int, deletions: int` | `git show --shortstat` per row | one extra operation |
+| `--with-changes` | `added: list<string>, modified: list<string>, deleted: list<string>` | `git show --name-status` per row, bucketed by status code (renames/copies land in `modified` under their new path) | one extra operation |
 | `--with-tag` | `tag: string \| null` - earliest tag containing the commit | `git tag --contains --sort=creatordate` per row | one operation per commit |
 
-*free* = already fetched by the base `list`. *one extra pass* = a single batched `git log` over the whole range, regardless of size. *one operation per commit* = scales with the number of commits.
+*free* = already fetched by the base `list`. *one extra operation* = a single batched `git log` over the whole range, regardless of size. *one operation per commit* = scales with the number of commits.
 
 # CI/CD recipes
 
