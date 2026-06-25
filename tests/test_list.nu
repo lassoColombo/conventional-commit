@@ -134,9 +134,25 @@ def "non-conventional commit keeps shape, conventional=false" [] {
 def "fills hash, author and date columns" [] {
     cd $in.repo
     let row = (list | first)
-    assert equal ($row.hash | str length) 40
+    # The hash is abbreviated by default; git's short hashes are at least 7 chars.
+    assert ((($row.hash | str length) >= 7) and (($row.hash | str length) < 40))
     assert equal $row.author "Test"
     assert equal ($row.date | describe) "datetime"
+}
+
+@test
+def "no-abbrev returns the full 40-char hash" [] {
+    cd $in.repo
+    let row = (list --no-abbrev | first)
+    assert equal ($row.hash | str length) 40
+}
+
+@test
+def "no-abbrev returns full parent hashes" [] {
+    cd $in.repo
+    # The second-newest commit has a single, non-empty parent.
+    let row = (list --no-abbrev --with-merge-info | get 1)
+    assert equal ($row.parents | first | str length) 40
 }
 
 # ---------- range semantics ----------

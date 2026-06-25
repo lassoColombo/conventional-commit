@@ -291,6 +291,7 @@ not a git repository or if a revision cannot be resolved.
 | `--with-tag`        | `switch` | Include the earliest tag containing each commit.           |
 | `--with-stats`      | `switch` | Include files_changed / insertions / deletions per commit. |
 | `--with-changes`    | `switch` | Include `added` / `modified` / `deleted` file-path lists.  |
+| `--no-abbrev`       | `switch` | Show full commit/parent hashes instead of abbreviated ones.|
 
 **Search terms:** `list`, `log`, `range`, `git`, `conventional`
 

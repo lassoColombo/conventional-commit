@@ -270,9 +270,12 @@ export def list [
   --with-tag                # Include the earliest tag containing each commit.
   --with-stats              # Include files_changed / insertions / deletions per commit.
   --with-changes            # Include `added` / `modified` / `deleted` file-path lists.
+  --no-abbrev               # Show the full commit hash instead of the abbreviated one.
 ]: nothing -> table {
   let range = if ($from | is-empty) { [] } else { [$"($from)..($to)"] }
-  let fmt = '%H%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%P%x1f%G?%x1f%B'
+  let hfmt = if $no_abbrev { '%H' } else { '%h' }
+  let pfmt = if $no_abbrev { '%P' } else { '%p' }
+  let fmt = $'($hfmt)%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f($pfmt)%x1f%G?%x1f%B'
   let res = ^git --no-pager log -z $"--pretty=format:($fmt)" ...$range | complete
   if $res.exit_code != 0 { error make --unspanned {msg: $res.stderr} }
 
@@ -323,7 +326,7 @@ export def list [
   let rs = char --unicode '1e'
 
   let rows = if not $with_stats { $rows } else {
-    let res = ^git --no-pager log --diff-merges=dense-combined --shortstat $"--pretty=format:($rs)%H" ...$range | complete
+    let res = ^git --no-pager log --diff-merges=dense-combined --shortstat $"--pretty=format:($rs)($hfmt)" ...$range | complete
     let stats = if $res.exit_code != 0 { {} } else {
       $res.stdout | split row $rs | where {|c| ($c | str trim | is-not-empty)} | reduce --fold {} {|c, acc|
         let ls = $c | lines
@@ -349,7 +352,7 @@ export def list [
   let rows = if not $with_changes { $rows } else {
     let tab = char tab
     let empty = {added: [], modified: [], deleted: []}
-    let res = ^git --no-pager log --diff-merges=dense-combined --name-status $"--pretty=format:($rs)%H" ...$range | complete
+    let res = ^git --no-pager log --diff-merges=dense-combined --name-status $"--pretty=format:($rs)($hfmt)" ...$range | complete
     let changes = if $res.exit_code != 0 { {} } else {
       $res.stdout | split row $rs | where {|c| ($c | str trim | is-not-empty)} | reduce --fold {} {|c, acc|
         let ls = $c | lines
